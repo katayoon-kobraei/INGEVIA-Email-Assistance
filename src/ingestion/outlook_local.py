@@ -1,8 +1,6 @@
 import datetime
 import win32com.client
 
-INBOX_FOLDER_ID = 6  # Outlook's fixed constant for the Inbox folder
-
 
 INBOX_FOLDER_ID = 6
 

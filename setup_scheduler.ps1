@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $TaskName = "Email AI Assistant"
 $ProjectRoot = $PSScriptRoot
-$PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$PythonExe = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
 $PipelineScript = Join-Path $ProjectRoot "src\pipeline.py"
 
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -11,7 +11,7 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 $Action = New-ScheduledTaskAction -Execute $PythonExe -Argument "`"$PipelineScript`"" -WorkingDirectory $ProjectRoot
 
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 10) `
+    -RepetitionInterval (New-TimeSpan -Minutes 2) `
     -RepetitionDuration (New-TimeSpan -Days 3650)   # ~10 years — Task Scheduler can't handle TimeSpan.MaxValue
 
 $Settings = New-ScheduledTaskSettingsSet `
@@ -24,4 +24,4 @@ Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
     -Settings $Settings -Principal $Principal `
     -Description "Checks Outlook for new emails, classifies them, and saves them to folders."
 
-Write-Host "Done. '$TaskName' will now run every 10 minutes."
+Write-Host "Done. '$TaskName' will now run every 2 minutes."
