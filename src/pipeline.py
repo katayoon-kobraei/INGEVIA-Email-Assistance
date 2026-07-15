@@ -6,7 +6,7 @@ from src.output.dedupe import load_processed_ids, mark_processed
 def run():
     ensure_output_root()
     processed = load_processed_ids(OUTPUT_ROOT)
-    emails = get_recent_emails(60)
+    emails = get_recent_emails(20)
     print(f"Found {len(emails)} email(s), {len(processed)} already processed.")
 
     for email in emails:

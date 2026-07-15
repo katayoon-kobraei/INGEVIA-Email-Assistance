@@ -4,31 +4,21 @@ import win32com.client
 INBOX_FOLDER_ID = 6  # Outlook's fixed constant for the Inbox folder
 
 
-def get_recent_emails(minutes_back: int = 30) -> list[dict]:
-    """
-    Connects to the Outlook desktop app running on this PC and returns
-    emails received within the last `minutes_back` minutes.
+INBOX_FOLDER_ID = 6
 
-    Each email is returned as a dict with:
-        id            - unique Outlook message ID (EntryID)
-        subject       - subject line
-        sender        - sender's email address
-        received      - datetime the email arrived
-        body          - plain text body
-        attachments   - Outlook Attachments collection (1-indexed, use .Count / .Item(i))
-    """
+def get_recent_emails(minutes_back: int = 30) -> list[dict]:
     outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
     messages = inbox.Items
-    messages.Sort("[ReceivedTime]", True)  # newest first
+    messages.Sort("[ReceivedTime]", True)
 
-    cutoff = datetime.datetime.now() - datetime.timedelta(minutes=minutes_back)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_back)
     results = []
 
     for message in messages:
-        received = message.ReceivedTime.replace(tzinfo=None)
+        received = message.ReceivedTime  # keep it timezone-aware, don't strip it
         if received < cutoff:
-            break  # sorted newest-first, so nothing further back matters
+            break
 
         results.append({
             "id": message.EntryID,
