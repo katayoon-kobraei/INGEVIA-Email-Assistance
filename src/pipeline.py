@@ -1,20 +1,24 @@
+from src.config import OUTPUT_ROOT, ensure_output_root
 from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 
-OUTPUT_ROOT = r"U:\Ingevia\INGEVIA-Email-Assistanc\storage"
-
 def run():
+    ensure_output_root()
     processed = load_processed_ids(OUTPUT_ROOT)
-    for email in get_recent_emails(60):
+    emails = get_recent_emails(60)
+    print(f"Found {len(emails)} email(s), {len(processed)} already processed.")
+
+    for email in emails:
         if email["id"] in processed:
             continue
         try:
-            save_email(email, OUTPUT_ROOT)
+            folder = save_email(email, OUTPUT_ROOT)
             mark_processed(email["id"], OUTPUT_ROOT)
+            print(f"Saved: {email['subject']} -> {folder}")
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
-            continue  # don't mark it — next run will retry this one specifically
+            continue
 
 if __name__ == "__main__":
     run()
