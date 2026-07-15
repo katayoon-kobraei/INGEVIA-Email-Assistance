@@ -1,3 +1,6 @@
+from tests.test_outlook_connection import get_recent_emails  # or wherever you moved it
+from src.output.save_email import save_email
+
 import win32com.client
 import datetime
 
@@ -26,5 +29,6 @@ def get_recent_emails(minutes_back=30):
     return results
 
 if __name__ == "__main__":
-    for email in get_recent_emails(60):
-        print(email["received"], "-", email["subject"])
+   for email in get_recent_emails(60):
+    folder = save_email(email, r"C:\EmailAssistant\Output")
+    print("Saved to:", folder)
