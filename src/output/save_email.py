@@ -7,8 +7,8 @@ from src.safety.attachment_scanner import check_attachment
 
 QUARANTINE_ROOT = r"C:\EmailAssistant\Quarantine"
 
-def save_email(email, output_root):
-    folder_path = os.path.join(output_root, build_folder_name(email))
+def save_email(email, department, output_root):
+    folder_path = os.path.join(output_root, department, build_folder_name(email))
     os.makedirs(folder_path, exist_ok=True)
 
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
@@ -23,7 +23,6 @@ def save_email(email, output_root):
             attachment = attachments.Item(i)
             tmp_path = os.path.join(tmp_dir, attachment.FileName)
             attachment.SaveAsFile(tmp_path)
-
             is_safe, reason = check_attachment(tmp_path)
 
             if is_safe:
@@ -37,6 +36,7 @@ def save_email(email, output_root):
     metadata = {
         "id": email["id"], "sender": email["sender"], "subject": email["subject"],
         "received": email["received"].isoformat(),
+        "department": department,
         "attachments": attachment_results,
     }
     with open(os.path.join(folder_path, "metadata.json"), "w", encoding="utf-8") as f:

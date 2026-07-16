@@ -1,1 +1,3 @@
 pywin32
+google-genai
+python-dotenv

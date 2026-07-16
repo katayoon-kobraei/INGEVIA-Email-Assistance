@@ -21,6 +21,7 @@ src/output/dedupe.py
 src/output/folder_namer.py
 src/output/save_email.py
 src/output/summary_writer.py
+src/safety/attachment_scanner.py
 src/safety/header_auth.py
 src/safety/link_checker.py
 src/safety/phishing_agent.py
