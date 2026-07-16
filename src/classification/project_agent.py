@@ -2,6 +2,7 @@ from pathlib import Path
 from google.genai import types
 from src.gemini_client import client
 from src.classification.schemas import ProjectMatchResult
+from src.config import GEMINI_MODEL
 
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "project_prompt.md"
 PROJECT_RUBRIC = PROMPT_PATH.read_text(encoding="utf-8")
@@ -14,7 +15,7 @@ def classify_project(email, existing_projects):
         f"Direction: {email['direction']}\nEmail subject: {email['subject']}\nContact: {contact}\n\n{email['body']}"
     )
     response = client.models.generate_content(
-        model="gemini-3-pro",
+        model=GEMINI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",

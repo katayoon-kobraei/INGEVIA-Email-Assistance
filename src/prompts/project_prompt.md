@@ -24,15 +24,24 @@ system based on the email's own date — never invent or guess a project_code yo
 
 ## Project folders
 
-Each project/client has a folder named "{project_code} {PROJECT NAME}". The PROJECT NAME has no strict
-formula — it's however the firm identifies that job internally: a client's personal name, a company
-name, or a site/location description. Real examples:
+Each project/client has a folder named "{project_code} {PROJECT NAME}". Build the PROJECT NAME
+in this order:
 
-  26-025 PALMETILLO ALCALÁ DE GUADAÍRA
-  26-026 ZONA LOGÍSTICA LA BISBAL
-  26-027 SOCUHER LA TORRETA
-  26-028 DIC ALFINACH
-  26-029 ENCARNA BOSCH
+1. Start with the company name (or the client's personal name if there is no company involved).
+2. If the email mentions the city/town where the company or site is located, add that next —
+   this is preferred when available.
+3. If no city/town is mentioned, but the email names a specific site or property instead, add
+   that site name in place of the city.
+4. If there is no company, no city, and no site/property name available at all, fall back to
+   just the client's last name (e.g., "BISBAL"), rather than a full first+last name.
+
+Real examples:
+
+  26-025 PALMETILLO ALCALÁ DE GUADAÍRA   -> company "Palmetillo" + city "Alcalá de Guadaíra"
+  26-026 ZONA LOGÍSTICA LA BISBAL         -> company/project "Zona Logística" + city "La Bisbal"
+  26-027 SOCUHER LA TORRETA               -> company "Socuher" + site "La Torreta" (no city given)
+  26-028 DIC ALFINACH                     -> company/entity "DIC" + place "Alfinach"
+  26-029 ENCARNA BOSCH                    -> client's personal name (no company, no city, no site)
 
 Always ALL CAPS, 2-5 words.
 

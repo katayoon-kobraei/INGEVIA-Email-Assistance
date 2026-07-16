@@ -17,6 +17,7 @@ $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
 $Settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 7) `
     -MultipleInstances IgnoreNew
+    -Compatibility Win8
 
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 
