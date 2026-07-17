@@ -10,4 +10,3 @@ def build_datetime_folder_name(email):
     actually live.
     """
     return email["timestamp"].strftime("%Y-%m-%d_%H%M%S")
-

@@ -1,6 +1,8 @@
 import os, json, shutil, tempfile
 from src.output.folder_namer import build_conversation_folder_name
 from src.safety.attachment_scanner import check_attachment
+from src.output.project_folders import get_project_year
+
 
 QUARANTINE_ROOT = r"C:\EmailAssistant\Quarantine"
 
@@ -14,7 +16,7 @@ def _make_unique_folder(base_path):
     return folder_path
 
 def save_email(email, project_folder_name, contact_label, topic_label, output_root):
-    year = email["timestamp"].year
+    year = get_project_year(project_folder_name) or email["timestamp"].year
     base_path = os.path.join(
         output_root, f"TRABAJOS {year}", project_folder_name, "03.-CORREO",
         email["direction"],
