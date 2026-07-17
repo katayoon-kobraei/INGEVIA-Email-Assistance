@@ -7,10 +7,9 @@ import pandas as pd
 import streamlit as st
 
 from src.config import OUTPUT_ROOT
-from src.output.project_folders import list_existing_projects
+from src.output.project_folders import list_existing_projects, discover_trabajos_years
 
 TASK_NAME = "Email AI Assistant"
-RELEVANT_YEARS = [2026, 2025]
 
 st.set_page_config(page_title="Email Assistant - Debug Dashboard", page_icon=":wrench:", layout="wide")
 st.title("Email Assistant — Debug Dashboard")
@@ -160,6 +159,11 @@ else:
     # --- Known projects -----------------------------------------------------
 
     st.subheader("Known project folders")
-    known_projects = list_existing_projects(OUTPUT_ROOT, RELEVANT_YEARS)
-    st.write(f"{len(known_projects)} project folder(s) on record:")
-    st.dataframe(pd.DataFrame({"Project Folder": known_projects}), use_container_width=True)
+    all_years = discover_trabajos_years(OUTPUT_ROOT)
+    project_rows = [
+        {"Year": year, "Project Folder": name}
+        for year in all_years
+        for name in list_existing_projects(OUTPUT_ROOT, [year])
+    ]
+    st.write(f"{len(project_rows)} project folder(s) on record across {len(all_years)} year(s):")
+    st.dataframe(pd.DataFrame(project_rows), use_container_width=True)

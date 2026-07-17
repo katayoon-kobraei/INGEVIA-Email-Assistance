@@ -33,3 +33,9 @@ class ProjectMatchResult(BaseModel):
     project_folder_name: str
     contact_label: str   # e.g. "E.BOSCH" or "DAVID REYERO (REYQUEDA)"
     topic_label: str
+    mentions_specific_address: bool  # true if THIS email names a specific site/address/location
+
+
+class AddressMatchResult(BaseModel):
+    matched_existing: bool
+    address_folder_name: str   # bare name, no code prefix -- e.g. "CAMÍ DE FAITANAR 2 - PICAÑA"

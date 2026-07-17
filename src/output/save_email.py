@@ -1,10 +1,14 @@
-import os, json, shutil, tempfile
+import os
+import json
+import shutil
+import tempfile
+
 from src.output.folder_namer import build_conversation_folder_name
 from src.safety.attachment_scanner import check_attachment
-from src.output.project_folders import get_project_year
-
+from src.output.project_folders import resolve_project_relative_path
 
 QUARANTINE_ROOT = r"C:\EmailAssistant\Quarantine"
+
 
 def _make_unique_folder(base_path):
     folder_path = base_path
@@ -15,10 +19,25 @@ def _make_unique_folder(base_path):
     os.makedirs(folder_path)
     return folder_path
 
-def save_email(email, project_folder_name, contact_label, topic_label, output_root):
-    year = get_project_year(project_folder_name) or email["timestamp"].year
+
+def save_email(email, project_folder_name, contact_label, topic_label, output_root, address_folder_name=None):
+    # Formal projects (already have a "{yy}-{seq}" code) and UNSORTED
+    # stay top-level, in their own year. Anything else -- a bare name
+    # with no code, meaning it's not a started project yet -- lands
+    # inside that year's holding pen ("{yy}-000 MAILS"), reusing the
+    # year it was first created in if it already exists there.
+    year, relative_project_path = resolve_project_relative_path(
+        output_root, project_folder_name, email["timestamp"].year
+    )
+
+    # If this email is about a specific site for a company that has
+    # multiple sites, nest one level deeper into that address's own
+    # folder before 03.-CORREO.
+    if address_folder_name:
+        relative_project_path = os.path.join(relative_project_path, address_folder_name)
+
     base_path = os.path.join(
-        output_root, f"TRABAJOS {year}", project_folder_name, "03.-CORREO",
+        output_root, f"TRABAJOS {year}", relative_project_path, "03.-CORREO",
         email["direction"],
         build_conversation_folder_name(email, contact_label, topic_label),
     )
@@ -49,6 +68,7 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
         "sender": email.get("sender"), "recipient": email.get("recipient"),
         "subject": email["subject"], "timestamp": email["timestamp"].isoformat(),
         "project_folder": project_folder_name,
+        "address_folder": address_folder_name,
         "contact_label": contact_label,
         "topic_label": topic_label,
         "attachments": attachment_results,

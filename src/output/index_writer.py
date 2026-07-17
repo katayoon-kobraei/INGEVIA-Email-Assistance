@@ -1,7 +1,7 @@
 import csv
 import os
 
-def append_to_index(email, project_folder_name, contact_label, topic_label, folder_path, output_root):
+def append_to_index(email, project_folder_name, contact_label, topic_label, folder_path, output_root, address_folder_name=None):
     index_path = os.path.join(output_root, "index.csv")
     file_exists = os.path.exists(index_path)
 
@@ -9,12 +9,13 @@ def append_to_index(email, project_folder_name, contact_label, topic_label, fold
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow([
-                "Year", "Project Folder", "Direction", "Contact", "Topic",
+                "Year", "Project Folder", "Address Folder", "Direction", "Contact", "Topic",
                 "Date", "Subject", "Sender/Recipient", "Attachments", "Folder Path"
             ])
         writer.writerow([
             email["timestamp"].year,
             project_folder_name,
+            address_folder_name or "",
             email["direction"],
             contact_label,
             topic_label,
