@@ -1,5 +1,6 @@
+import win32com.client
+
 from src.config import OUTPUT_ROOT, ensure_output_root
-from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.project_folders import (
@@ -14,51 +15,57 @@ from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
+INBOX_FOLDER_ID = 6
+COUNT = 10
+
+
+def _get_latest_inbox_emails(count):
+    """Local to this script only -- does not touch outlook_local.py."""
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    folder = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
+    messages = folder.Items
+    messages.Sort("[ReceivedTime]", True)
+
+    results = []
+    for message in messages:
+        if len(results) >= count:
+            break
+        try:
+            results.append({
+                "id": message.EntryID,
+                "subject": message.Subject,
+                "sender": message.SenderEmailAddress,
+                "recipient": None,
+                "timestamp": message.ReceivedTime,
+                "body": message.Body,
+                "attachments": message.Attachments,
+                "direction": "ENTRANTE",
+            })
+        except Exception:
+            continue  # skip odd item types (meeting requests, read receipts, etc.)
+    return results
+
 
 def run():
     ensure_output_root()
     processed = load_processed_ids(OUTPUT_ROOT)
-    emails = get_recent_emails(20)
-    print(f"Found {len(emails)} email(s), {len(processed)} already processed.")
+    emails = _get_latest_inbox_emails(COUNT)
+    print(f"Testing pipeline on the {len(emails)} latest Inbox email(s) (ignoring time), {len(processed)} already processed.")
 
     for email in emails:
         if email["id"] in processed:
+            print(f"Skipping (already processed): {email['subject']}")
             continue
         try:
-            # Matching is scoped to the email's own year only -- a
-            # returning client's folder from a different year will not
-            # be shown as a candidate here.
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
             try:
-                # No more automatic new-project-code creation here.
-                # classify_project just returns a name -- if it's a
-                # real match, it already has a code; if not, it's a
-                # bare name and save_email() will route it into that
-                # year's holding pen ("{yy}-000 MAILS") instead of
-                # minting a new formal project on its own.
                 match = classify_project(email, existing)
-
-                # Noise filter: social media notifications, marketing,
-                # automated system mail, etc. -- not real client
-                # correspondence, so it's skipped entirely (not even
-                # sent to UNSORTED/holding pen), but still marked
-                # processed so it isn't re-evaluated every run.
-                if not match.is_relevant:
-                    mark_processed(email["id"], OUTPUT_ROOT)
-                    print(f"Skipped (not relevant): {email['subject']}")
-                    continue
-
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
 
-                # Second step, only for a company that already has a
-                # real code: if this email names a specific site, match
-                # it against that company's existing sites (or mint the
-                # next one automatically -- safe to do without a human
-                # gate, since the company itself was already vetted).
                 if match.mentions_specific_address and is_formal_project_code(project_folder_name):
                     company_year = get_project_year(project_folder_name) or email_year
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
@@ -85,6 +92,7 @@ def run():
             continue
 
     generate_status_page(OUTPUT_ROOT)
+    print("Done.")
 
 
 if __name__ == "__main__":

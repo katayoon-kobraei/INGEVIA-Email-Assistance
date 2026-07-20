@@ -1,14 +1,3 @@
-# setup_eval_scheduler.ps1
-#
-# One-time setup, run on YOUR OWN dev machine only -- do NOT include
-# this in the boss's production install. Registers a WEEKLY Task
-# Scheduler job that re-runs eval_project_agent.py against the real
-# archive and refreshes eval_results.xlsx automatically, so the
-# latest accuracy numbers are already there whenever you check in.
-#
-# This is separate from setup_scheduler.ps1 (the production email
-# pipeline task) -- different task name, won't conflict with it.
-
 $ErrorActionPreference = "Stop"
 
 $TaskName = "Email AI Assistant - Daily Eval"
