@@ -82,6 +82,28 @@ def get_project_year(project_folder_name):
     return 2000 + int(match.group(1)) if match else None
 
 
+def has_holding_pen_counter(name):
+    """True if a holding-pen entry name already has its local '{NNN}'
+    counter prefix (e.g. '001 PLENERGY-PLAINCO')."""
+    return re.match(r"^\d{3}\s", name) is not None
+
+
+def get_next_holding_pen_counter(output_root, year):
+    """Next sequential local counter (e.g. '004') for a brand-new entry
+    in that year's holding pen ('{yy}-000 MAILS'). This is purely a
+    local, human-friendly ordering within the pen -- unrelated to, and
+    replaced by, the real project code if/when a project is formally
+    promoted out of the pen."""
+    pen_path = os.path.join(output_root, f"TRABAJOS {year}", get_holding_pen_name(year))
+    max_seq = 0
+    if os.path.isdir(pen_path):
+        for name in os.listdir(pen_path):
+            match = re.match(r"^(\d{3})\s", name)
+            if match:
+                max_seq = max(max_seq, int(match.group(1)))
+    return f"{max_seq + 1:03d}"
+
+
 def resolve_project_relative_path(output_root, project_folder_name, email_year):
     """Decide where a project's folder actually lives.
 
@@ -91,36 +113,64 @@ def resolve_project_relative_path(output_root, project_folder_name, email_year):
         project's own year (from its code).
       - Everything else (a bare descriptive name, no code -- i.e. a
         not-yet-started project) is filed under the EMAIL's own year,
-        inside that year's holding pen ('{yy}-000 MAILS/{name}').
-        Matching is scoped to a single year (see list_existing_projects),
-        so a bare name is always treated as belonging to the year it
-        was just seen in -- it will not be merged with a same-named
-        entry from a different year.
+        inside that year's holding pen ('{yy}-000 MAILS/{NNN name}').
+        A brand-new bare name (no matching entry yet, so it has no
+        '{NNN}' counter) gets the pen's next local counter minted for
+        it automatically here -- the model itself never assigns this,
+        same as it never assigns a real project code. Matching is
+        scoped to a single year (see list_existing_projects), so a
+        bare name is always treated as belonging to the year it was
+        just seen in -- it will not be merged with a same-named entry
+        from a different year.
     """
     if is_formal_project_code(project_folder_name) or project_folder_name in RESERVED_TOP_LEVEL_NAMES:
         year = get_project_year(project_folder_name) or email_year
         return year, project_folder_name
 
-    relative_path = os.path.join(get_holding_pen_name(email_year), project_folder_name)
+    pen_entry_name = project_folder_name
+    if not has_holding_pen_counter(pen_entry_name):
+        counter = get_next_holding_pen_counter(output_root, email_year)
+        pen_entry_name = f"{counter} {pen_entry_name}"
+
+    relative_path = os.path.join(get_holding_pen_name(email_year), pen_entry_name)
     return email_year, relative_path
 
 
+def get_company_path(output_root, company_year, company_folder_name):
+    """Resolve where a company's folder actually lives on disk, whether
+    it's a formal coded project (top-level) or a bare not-yet-formal
+    name sitting inside that year's holding pen."""
+    if is_formal_project_code(company_folder_name) or company_folder_name in RESERVED_TOP_LEVEL_NAMES:
+        return os.path.join(output_root, f"TRABAJOS {company_year}", company_folder_name)
+    return os.path.join(
+        output_root, f"TRABAJOS {company_year}", get_holding_pen_name(company_year), company_folder_name
+    )
+
+
 def list_existing_addresses(output_root, company_year, company_folder_name):
-    """Existing address subfolders for one specific formal company
-    (e.g. inside '26-003 PLENERGY'), full names including their own
-    '{company_code}-{NN}' prefix. Only meaningful for a company that
-    already has a real project code -- returns [] otherwise."""
-    company_path = os.path.join(output_root, f"TRABAJOS {company_year}", company_folder_name)
+    """Existing address subfolders for one specific company. For a
+    formal company (e.g. '26-003 PLENERGY'), returns full names
+    including their own '{company_code}-{NN}' prefix. For a
+    not-yet-formal (holding-pen) company, there's no code sequence yet
+    -- returns the bare address names directly instead."""
+    company_path = get_company_path(output_root, company_year, company_folder_name)
     if not os.path.isdir(company_path):
         return []
     company_code_match = re.match(r"^(\d{2}-\d+)", company_folder_name)
-    if not company_code_match:
-        return []
-    company_code = company_code_match.group(1)
-    pattern = re.compile(rf"^{re.escape(company_code)}-\d+\s")
+    if company_code_match:
+        company_code = company_code_match.group(1)
+        pattern = re.compile(rf"^{re.escape(company_code)}-\d+\s")
+        return sorted(
+            name for name in os.listdir(company_path)
+            if os.path.isdir(os.path.join(company_path, name)) and pattern.match(name)
+        )
+    # Holding-pen company: no code sequence exists yet, so address
+    # subfolders are just bare names. "03.-CORREO" itself lives
+    # directly under the company folder for emails with no specific
+    # site, so it must be excluded from the address candidate list.
     return sorted(
         name for name in os.listdir(company_path)
-        if os.path.isdir(os.path.join(company_path, name)) and pattern.match(name)
+        if os.path.isdir(os.path.join(company_path, name)) and name != "03.-CORREO"
     )
 
 

@@ -21,6 +21,11 @@ codes). Decide:
    address_folder_name — a bare name with NO code prefix, in the same style as the real examples:
    street/site name (+ number if given) + " - " + town/city if known. ALL CAPS.
 
+Note: if this company doesn't have a formal project code yet, its existing address folders will
+be shown to you as bare names with no code prefix at all (not even the "{code}-{NN}" part). Treat
+that the same way — if the email matches one shown, return that exact bare name with
+matched_existing = true; otherwise propose a new bare name as in case 2 above.
+
 ## Building the address name
 
 Use whatever specific location detail the email actually gives — street name, plot name, site

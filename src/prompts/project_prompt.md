@@ -76,6 +76,29 @@ Always ALL CAPS, 2-5 words. When proposing a NEW project (no match found), retur
 with no project_code prefix — the code prefix shown in the real examples above only appears on
 folders that already exist.
 
+## Recurring multi-site clients (administrative/licensing partners)
+
+Some correspondence is about a company that repeatedly handles paperwork -- licenses, taxes,
+permits, fianzas, expedientes -- across MANY different physical sites for one ongoing client
+relationship, rather than a single one-off project per site. Signals of this pattern: a recurring
+administrative/licensing contact, "Expediente" numbers, site codes like "US 463", repeated
+mentions of permits/tasas/fianzas/ICIO tied to different towns or addresses over time.
+
+For this pattern, do NOT fold the site/location into the project name -- that is what the address
+step below is for instead. Build the project name like this:
+
+  - If the email involves both an underlying brand/client company AND a separate administrative or
+    licensing partner company handling the paperwork on their behalf (e.g. Plenergy as the brand,
+    Plainco as their licensing administrator), name the project "{BRAND}-{PARTNER}", both in caps,
+    e.g. PLENERGY-PLAINCO.
+  - If only the brand/client company appears, with no separate administrative partner involved in
+    this email, just use that company's name alone, e.g. PLENERGY.
+  - Always set mentions_specific_address = true whenever this email names a specific site -- the
+    site becomes an address subfolder, never part of the project name.
+
+This overrides the "company + city/site" naming rule above whenever this recurring, multi-site
+pattern applies.
+
 ## Matching vs. new project
 
 Given the email and the list of existing project folders for this same year: if this email is
@@ -87,6 +110,12 @@ A returning client is only a match if the email is about the SAME job/site/contr
 folders shown. If the company is familiar but the email concerns a different site or a new
 commission, treat it as a new project — matched_existing = false, propose a new name — even if
 the company name overlaps with an existing folder.
+
+The one exception is the recurring multi-site pattern above: if the company/partner combination
+(e.g. PLENERGY-PLAINCO, or PLENERGY alone) already has a folder, a new site for that same
+company IS a match to that existing folder — matched_existing = true — even though the specific
+site differs. Set mentions_specific_address = true so the site gets filed as an address subfolder
+underneath it, rather than proposing a brand-new project.
 
 ## Contact label
 

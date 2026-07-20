@@ -62,20 +62,28 @@ def run():
             address_folder_name = None
             try:
                 match = classify_project(email, existing)
+
+                if not match.is_relevant:
+                    mark_processed(email["id"], OUTPUT_ROOT)
+                    print(f"Skipped (not relevant): {email['subject']}")
+                    continue
+
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
 
-                if match.mentions_specific_address and is_formal_project_code(project_folder_name):
+                if match.mentions_specific_address:
                     company_year = get_project_year(project_folder_name) or email_year
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
                     try:
                         addr_match = classify_address(email, existing_addresses)
                         if addr_match.matched_existing:
                             address_folder_name = addr_match.address_folder_name
-                        else:
+                        elif is_formal_project_code(project_folder_name):
                             addr_code = get_next_address_code(OUTPUT_ROOT, company_year, project_folder_name)
                             address_folder_name = f"{addr_code} {addr_match.address_folder_name}"
+                        else:
+                            address_folder_name = addr_match.address_folder_name
                     except Exception as e:
                         print(f"Address classification failed for {email['subject']}: {e}")
                         address_folder_name = None
