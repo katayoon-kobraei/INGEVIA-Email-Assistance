@@ -1,9 +1,18 @@
-from src.config import OUTPUT_ROOT, ensure_output_root, FLAG_PROCESSED_EMAILS, PROCESSED_CATEGORY_NAME
+from src.config import (
+    OUTPUT_ROOT,
+    ensure_output_root,
+    FLAG_PROCESSED_EMAILS,
+    PROCESSED_CATEGORY_NAME,
+    ARCHIVE_JUNK_EMAILS,
+    JUNK_ARCHIVE_FOLDER_NAME,
+)
 from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
+from src.output.outlook_archive import archive_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
+from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -34,12 +43,27 @@ def _retry_pending_flags():
             print(f"  Flagged on retry: {entry_id}")
 
 
+def _retry_pending_archives():
+    """Same idea as _retry_pending_flags(), but for junk emails whose
+    move-to-archive-folder failed last run."""
+    if not ARCHIVE_JUNK_EMAILS:
+        return
+    pending = load_pending_archive(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} email(s) whose archive move failed last run...")
+    for entry_id, folder_name in list(pending.items()):
+        if archive_email(entry_id, folder_name):
+            remove_pending_archive(OUTPUT_ROOT, entry_id)
+            print(f"  Archived on retry: {entry_id}")
+
+
 def _mark_done(email):
     """Marks an email as processed locally (dedupe state) and, if
     enabled, stamps it back in Outlook so the boss can see it was
-    handled -- regardless of whether it ended up filed or skipped.
-    If the Outlook write fails (e.g. the email was open/selected at
-    that moment), it's queued to retry automatically next run."""
+    handled. Used for emails that got filed into a project. If the
+    Outlook write fails (e.g. the email was open/selected at that
+    moment), it's queued to retry automatically next run."""
     mark_processed(email["id"], OUTPUT_ROOT)
     if not FLAG_PROCESSED_EMAILS:
         return
@@ -51,9 +75,30 @@ def _mark_done(email):
         print(f"  (Outlook flag failed -- will retry automatically next run)")
 
 
+def _handle_junk(email):
+    """Marks a junk/irrelevant email as processed locally, then either
+    moves it out of the Inbox into the archive subfolder (default) or
+    just flags it in place if ARCHIVE_JUNK_EMAILS is off. A failed
+    move is queued to retry automatically next run, same as flags."""
+    mark_processed(email["id"], OUTPUT_ROOT)
+
+    if not ARCHIVE_JUNK_EMAILS:
+        if FLAG_PROCESSED_EMAILS:
+            mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+        return
+
+    ok = archive_email(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+    if ok:
+        remove_pending_archive(OUTPUT_ROOT, email["id"])
+    else:
+        add_pending_archive(OUTPUT_ROOT, email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+        print(f"  (Archive move failed -- will retry automatically next run)")
+
+
 def run():
     ensure_output_root()
     _retry_pending_flags()
+    _retry_pending_archives()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = get_recent_emails(20)
     print(f"Found {len(emails)} email(s), {len(processed)} already processed.")
@@ -79,7 +124,7 @@ def run():
                 relevance = None
 
             if relevance is not None and not relevance.is_relevant:
-                _mark_done(email)
+                _handle_junk(email)
                 print(f"Skipped (not relevant): {email['subject']}")
                 continue
 
