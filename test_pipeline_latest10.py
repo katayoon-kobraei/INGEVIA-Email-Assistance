@@ -16,7 +16,7 @@ from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
 INBOX_FOLDER_ID = 6
-COUNT = 10
+COUNT = 3
 
 
 def _get_latest_inbox_emails(count):

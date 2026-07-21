@@ -1,7 +1,8 @@
-from src.config import OUTPUT_ROOT, ensure_output_root
+from src.config import OUTPUT_ROOT, ensure_output_root, FLAG_PROCESSED_EMAILS, PROCESSED_CATEGORY_NAME
 from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
+from src.output.outlook_flag import mark_email_processed
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -13,6 +14,15 @@ from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
+
+
+def _mark_done(email):
+    """Marks an email as processed locally (dedupe state) and, if
+    enabled, stamps it back in Outlook so the boss can see it was
+    handled -- regardless of whether it ended up filed or skipped."""
+    mark_processed(email["id"], OUTPUT_ROOT)
+    if FLAG_PROCESSED_EMAILS:
+        mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
 
 
 def run():
@@ -44,9 +54,11 @@ def run():
                 # automated system mail, etc. -- not real client
                 # correspondence, so it's skipped entirely (not even
                 # sent to UNSORTED/holding pen), but still marked
-                # processed so it isn't re-evaluated every run.
+                # processed (and flagged in Outlook) so it isn't
+                # re-evaluated every run and the boss can still see it
+                # was looked at.
                 if not match.is_relevant:
-                    mark_processed(email["id"], OUTPUT_ROOT)
+                    _mark_done(email)
                     print(f"Skipped (not relevant): {email['subject']}")
                     continue
 
@@ -54,29 +66,21 @@ def run():
                 contact_label = match.contact_label
                 topic_label = match.topic_label
 
-                # Second step: if this email names a specific site,
-                # match it against that company's existing sites (or
-                # mint/propose the next one automatically -- safe to do
-                # without a human gate, since the company itself was
-                # already vetted). Works both for a company that
-                # already has a real code (numeric "{code}-{NN}"
-                # addresses) and for a not-yet-formal holding-pen
-                # company (bare address names, no code yet).
-                if match.mentions_specific_address:
+                # Second step, only for a company that already has a
+                # real code: if this email names a specific site, match
+                # it against that company's existing sites (or mint the
+                # next one automatically -- safe to do without a human
+                # gate, since the company itself was already vetted).
+                if match.mentions_specific_address and is_formal_project_code(project_folder_name):
                     company_year = get_project_year(project_folder_name) or email_year
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
                     try:
                         addr_match = classify_address(email, existing_addresses)
                         if addr_match.matched_existing:
                             address_folder_name = addr_match.address_folder_name
-                        elif is_formal_project_code(project_folder_name):
+                        else:
                             addr_code = get_next_address_code(OUTPUT_ROOT, company_year, project_folder_name)
                             address_folder_name = f"{addr_code} {addr_match.address_folder_name}"
-                        else:
-                            # Not-yet-formal company: no code sequence
-                            # to mint from yet, so just use the bare
-                            # address name directly.
-                            address_folder_name = addr_match.address_folder_name
                     except Exception as e:
                         print(f"Address classification failed for {email['subject']}: {e}")
                         address_folder_name = None
@@ -86,7 +90,7 @@ def run():
 
             folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
-            mark_processed(email["id"], OUTPUT_ROOT)
+            _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
