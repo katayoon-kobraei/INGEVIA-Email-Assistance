@@ -135,32 +135,34 @@ def run():
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
             try:
-                # No more automatic new-project-code creation here.
                 # classify_project just returns a name -- if it's a
                 # real match, it already has a code; if not, it's a
-                # bare name and save_email() will route it into that
-                # year's holding pen ("{yy}-000 MAILS") instead of
-                # minting a new formal project on its own.
+                # bare name and save_email() -> resolve_project_relative_path()
+                # routes it into that year's holding pen and mints its
+                # local "{NNN}" counter automatically, without minting
+                # a new formal project code on its own.
                 match = classify_project(email, existing)
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
 
-                # Second step, only for a company that already has a
-                # real code: if this email names a specific site, match
-                # it against that company's existing sites (or mint the
-                # next one automatically -- safe to do without a human
-                # gate, since the company itself was already vetted).
-                if match.mentions_specific_address and is_formal_project_code(project_folder_name):
+                # Address sub-folders apply to formal AND holding-pen
+                # companies alike -- only the CODE differs: a formal
+                # company gets a real "{code}-{NN}" address code, a
+                # holding-pen company just gets a bare address name
+                # (no code sequence exists yet for it).
+                if match.mentions_specific_address:
                     company_year = get_project_year(project_folder_name) or email_year
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
                     try:
                         addr_match = classify_address(email, existing_addresses)
                         if addr_match.matched_existing:
                             address_folder_name = addr_match.address_folder_name
-                        else:
+                        elif is_formal_project_code(project_folder_name):
                             addr_code = get_next_address_code(OUTPUT_ROOT, company_year, project_folder_name)
                             address_folder_name = f"{addr_code} {addr_match.address_folder_name}"
+                        else:
+                            address_folder_name = addr_match.address_folder_name
                     except Exception as e:
                         print(f"Address classification failed for {email['subject']}: {e}")
                         address_folder_name = None
