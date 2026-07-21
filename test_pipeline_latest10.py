@@ -1,8 +1,9 @@
 import win32com.client
 
-from src.config import OUTPUT_ROOT, ensure_output_root
+from src.config import OUTPUT_ROOT, ensure_output_root, FLAG_PROCESSED_EMAILS, PROCESSED_CATEGORY_NAME
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
+from src.output.outlook_flag import mark_email_processed
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -46,6 +47,12 @@ def _get_latest_inbox_emails(count):
     return results
 
 
+def _mark_done(email):
+    mark_processed(email["id"], OUTPUT_ROOT)
+    if FLAG_PROCESSED_EMAILS:
+        mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+
+
 def run():
     ensure_output_root()
     processed = load_processed_ids(OUTPUT_ROOT)
@@ -64,7 +71,7 @@ def run():
                 match = classify_project(email, existing)
 
                 if not match.is_relevant:
-                    mark_processed(email["id"], OUTPUT_ROOT)
+                    _mark_done(email)
                     print(f"Skipped (not relevant): {email['subject']}")
                     continue
 
@@ -93,7 +100,7 @@ def run():
 
             folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
-            mark_processed(email["id"], OUTPUT_ROOT)
+            _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
