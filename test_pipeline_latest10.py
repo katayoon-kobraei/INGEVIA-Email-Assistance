@@ -4,6 +4,7 @@ from src.config import OUTPUT_ROOT, ensure_output_root, FLAG_PROCESSED_EMAILS, P
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
+from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -17,7 +18,7 @@ from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
 INBOX_FOLDER_ID = 6
-COUNT = 3
+COUNT = 5
 
 
 def _get_latest_inbox_emails(count):
@@ -47,14 +48,36 @@ def _get_latest_inbox_emails(count):
     return results
 
 
+def _retry_pending_flags():
+    if not FLAG_PROCESSED_EMAILS:
+        return
+    pending = load_pending_flags(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} email(s) whose Outlook flag failed last run...")
+    for entry_id, category in list(pending.items()):
+        if mark_email_processed(entry_id, category):
+            remove_pending_flag(OUTPUT_ROOT, entry_id)
+            print(f"  Flagged on retry: {entry_id}")
+
+
 def _mark_done(email):
     mark_processed(email["id"], OUTPUT_ROOT)
-    if FLAG_PROCESSED_EMAILS:
-        mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+    if not FLAG_PROCESSED_EMAILS:
+        print("  (Outlook flag skipped -- FLAG_PROCESSED_EMAILS is off in .env)")
+        return
+    ok = mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+    if ok:
+        remove_pending_flag(OUTPUT_ROOT, email["id"])
+        print("  (Outlook flag: applied OK)")
+    else:
+        add_pending_flag(OUTPUT_ROOT, email["id"], PROCESSED_CATEGORY_NAME)
+        print("  (Outlook flag: FAILED -- queued to retry next run)")
 
 
 def run():
     ensure_output_root()
+    _retry_pending_flags()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = _get_latest_inbox_emails(COUNT)
     print(f"Testing pipeline on the {len(emails)} latest Inbox email(s) (ignoring time), {len(processed)} already processed.")
