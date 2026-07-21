@@ -28,8 +28,11 @@ class DepartmentResult(BaseModel):
     reasoning: str
 
 
-class ProjectMatchResult(BaseModel):
+class RelevanceResult(BaseModel):
     is_relevant: bool  # false = social media / marketing / automated noise -- not real client correspondence
+
+
+class ProjectMatchResult(BaseModel):
     matched_existing: bool
     project_folder_name: str
     contact_label: str   # e.g. "E.BOSCH" or "DAVID REYERO (REYQUEDA)"

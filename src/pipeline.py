@@ -11,6 +11,7 @@ from src.output.project_folders import (
     get_project_year,
     is_formal_project_code,
 )
+from src.classification.relevance_agent import classify_relevance
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
@@ -61,6 +62,27 @@ def run():
         if email["id"] in processed:
             continue
         try:
+            # Cheap first-pass filter: a short, separate prompt with
+            # no folder structure, no matching rules -- just "is this
+            # real correspondence or noise?". This runs on EVERY
+            # email so junk (social media notifications, marketing,
+            # automated mail) gets caught for a fraction of the token
+            # cost of the full classify_project prompt below, instead
+            # of paying for that long prompt on every single email.
+            # If the relevance check itself fails (API error), we
+            # fall through to full classification rather than risk
+            # silently dropping a real email.
+            try:
+                relevance = classify_relevance(email)
+            except Exception as e:
+                print(f"Relevance check failed for {email['subject']}: {e}")
+                relevance = None
+
+            if relevance is not None and not relevance.is_relevant:
+                _mark_done(email)
+                print(f"Skipped (not relevant): {email['subject']}")
+                continue
+
             # Matching is scoped to the email's own year only -- a
             # returning client's folder from a different year will not
             # be shown as a candidate here.
@@ -75,19 +97,6 @@ def run():
                 # year's holding pen ("{yy}-000 MAILS") instead of
                 # minting a new formal project on its own.
                 match = classify_project(email, existing)
-
-                # Noise filter: social media notifications, marketing,
-                # automated system mail, etc. -- not real client
-                # correspondence, so it's skipped entirely (not even
-                # sent to UNSORTED/holding pen), but still marked
-                # processed (and flagged in Outlook) so it isn't
-                # re-evaluated every run and the boss can still see it
-                # was looked at.
-                if not match.is_relevant:
-                    _mark_done(email)
-                    print(f"Skipped (not relevant): {email['subject']}")
-                    continue
-
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label

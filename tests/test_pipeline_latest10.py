@@ -12,13 +12,14 @@ from src.output.project_folders import (
     get_project_year,
     is_formal_project_code,
 )
+from src.classification.relevance_agent import classify_relevance
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
 INBOX_FOLDER_ID = 6
-COUNT = 5
+COUNT = 3
 
 
 def _get_latest_inbox_emails(count):
@@ -87,17 +88,26 @@ def run():
             print(f"Skipping (already processed): {email['subject']}")
             continue
         try:
+            # Cheap first-pass filter -- runs on every email, before
+            # the long/expensive classify_project prompt. Junk (social
+            # media, marketing, automated mail) gets caught here for
+            # much less than the cost of the full classification call.
+            try:
+                relevance = classify_relevance(email)
+            except Exception as e:
+                print(f"Relevance check failed for {email['subject']}: {e}")
+                relevance = None
+
+            if relevance is not None and not relevance.is_relevant:
+                _mark_done(email)
+                print(f"Skipped (not relevant): {email['subject']}")
+                continue
+
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
             try:
                 match = classify_project(email, existing)
-
-                if not match.is_relevant:
-                    _mark_done(email)
-                    print(f"Skipped (not relevant): {email['subject']}")
-                    continue
-
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
