@@ -1,10 +1,19 @@
 import win32com.client
 
-from src.config import OUTPUT_ROOT, ensure_output_root, FLAG_PROCESSED_EMAILS, PROCESSED_CATEGORY_NAME
+from src.config import (
+    OUTPUT_ROOT,
+    ensure_output_root,
+    FLAG_PROCESSED_EMAILS,
+    PROCESSED_CATEGORY_NAME,
+    ARCHIVE_JUNK_EMAILS,
+    JUNK_ARCHIVE_FOLDER_NAME,
+)
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
+from src.output.outlook_archive import archive_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
+from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -12,13 +21,14 @@ from src.output.project_folders import (
     get_project_year,
     is_formal_project_code,
 )
+from src.classification.relevance_agent import classify_relevance
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
 INBOX_FOLDER_ID = 6
-COUNT = 5
+COUNT = 3
 
 
 def _get_latest_inbox_emails(count):
@@ -61,6 +71,19 @@ def _retry_pending_flags():
             print(f"  Flagged on retry: {entry_id}")
 
 
+def _retry_pending_archives():
+    if not ARCHIVE_JUNK_EMAILS:
+        return
+    pending = load_pending_archive(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} email(s) whose archive move failed last run...")
+    for entry_id, folder_name in list(pending.items()):
+        if archive_email(entry_id, folder_name):
+            remove_pending_archive(OUTPUT_ROOT, entry_id)
+            print(f"  Archived on retry: {entry_id}")
+
+
 def _mark_done(email):
     mark_processed(email["id"], OUTPUT_ROOT)
     if not FLAG_PROCESSED_EMAILS:
@@ -75,9 +98,28 @@ def _mark_done(email):
         print("  (Outlook flag: FAILED -- queued to retry next run)")
 
 
+def _handle_junk(email):
+    mark_processed(email["id"], OUTPUT_ROOT)
+
+    if not ARCHIVE_JUNK_EMAILS:
+        print("  (Archive skipped -- ARCHIVE_JUNK_EMAILS is off in .env)")
+        if FLAG_PROCESSED_EMAILS:
+            mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+        return
+
+    ok = archive_email(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+    if ok:
+        remove_pending_archive(OUTPUT_ROOT, email["id"])
+        print(f"  (Moved to '{JUNK_ARCHIVE_FOLDER_NAME}' OK)")
+    else:
+        add_pending_archive(OUTPUT_ROOT, email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+        print("  (Archive move FAILED -- queued to retry next run)")
+
+
 def run():
     ensure_output_root()
     _retry_pending_flags()
+    _retry_pending_archives()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = _get_latest_inbox_emails(COUNT)
     print(f"Testing pipeline on the {len(emails)} latest Inbox email(s) (ignoring time), {len(processed)} already processed.")
@@ -87,17 +129,22 @@ def run():
             print(f"Skipping (already processed): {email['subject']}")
             continue
         try:
+            try:
+                relevance = classify_relevance(email)
+            except Exception as e:
+                print(f"Relevance check failed for {email['subject']}: {e}")
+                relevance = None
+
+            if relevance is not None and not relevance.is_relevant:
+                _handle_junk(email)
+                print(f"Skipped (not relevant): {email['subject']}")
+                continue
+
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
             try:
                 match = classify_project(email, existing)
-
-                if not match.is_relevant:
-                    _mark_done(email)
-                    print(f"Skipped (not relevant): {email['subject']}")
-                    continue
-
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
