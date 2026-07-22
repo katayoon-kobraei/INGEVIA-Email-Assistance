@@ -7,6 +7,8 @@ from src.config import (
     PROCESSED_CATEGORY_NAME,
     ARCHIVE_JUNK_EMAILS,
     JUNK_ARCHIVE_FOLDER_NAME,
+    CHECK_PENDING_RESPONSES,
+    PENDING_FOLDER_NAME,
 )
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
@@ -14,6 +16,7 @@ from src.output.outlook_flag import mark_email_processed
 from src.output.outlook_archive import archive_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
+from src.output.pending_list import append_to_pending_list
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -22,6 +25,7 @@ from src.output.project_folders import (
     is_formal_project_code,
 )
 from src.classification.relevance_agent import classify_relevance
+from src.classification.pending_agent import classify_pending
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
@@ -72,16 +76,16 @@ def _retry_pending_flags():
 
 
 def _retry_pending_archives():
-    if not ARCHIVE_JUNK_EMAILS:
+    if not (ARCHIVE_JUNK_EMAILS or CHECK_PENDING_RESPONSES):
         return
     pending = load_pending_archive(OUTPUT_ROOT)
     if not pending:
         return
-    print(f"Retrying {len(pending)} email(s) whose archive move failed last run...")
+    print(f"Retrying {len(pending)} email(s) whose folder move failed last run...")
     for entry_id, folder_name in list(pending.items()):
         if archive_email(entry_id, folder_name):
             remove_pending_archive(OUTPUT_ROOT, entry_id)
-            print(f"  Archived on retry: {entry_id}")
+            print(f"  Moved on retry: {entry_id} -> {folder_name}")
 
 
 def _mark_done(email):
@@ -114,6 +118,28 @@ def _handle_junk(email):
     else:
         add_pending_archive(OUTPUT_ROOT, email["id"], JUNK_ARCHIVE_FOLDER_NAME)
         print("  (Archive move FAILED -- queued to retry next run)")
+
+
+def _handle_pending_check(email):
+    if not CHECK_PENDING_RESPONSES or email.get("direction") != "ENTRANTE":
+        return
+    try:
+        pending = classify_pending(email)
+    except Exception as e:
+        print(f"Pending-response check failed for {email['subject']}: {e}")
+        return
+    if not pending.needs_response:
+        print("  (Not pending -- no reply needed)")
+        return
+
+    append_to_pending_list(email, OUTPUT_ROOT)
+    ok = archive_email(email["id"], PENDING_FOLDER_NAME)
+    if ok:
+        remove_pending_archive(OUTPUT_ROOT, email["id"])
+        print(f"  (Moved to '{PENDING_FOLDER_NAME}' OK -- logged to pendientes.csv)")
+    else:
+        add_pending_archive(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
+        print("  (Move to pending folder FAILED -- queued to retry next run)")
 
 
 def run():
@@ -172,6 +198,8 @@ def run():
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
             _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
+
+            _handle_pending_check(email)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue
