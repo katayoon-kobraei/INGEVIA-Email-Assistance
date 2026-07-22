@@ -23,7 +23,6 @@ from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
     get_project_year,
-    is_formal_project_code,
 )
 from src.classification.relevance_agent import classify_relevance
 from src.classification.project_agent import classify_project
@@ -96,11 +95,13 @@ def main():
         print(f"  -> Topic:             {match.topic_label}")
         print(f"  -> Mentions address:  {match.mentions_specific_address}")
 
-        if match.mentions_specific_address and is_formal_project_code(match.project_folder_name):
+        # Address sub-folders apply to formal AND holding-pen companies
+        # alike -- matches the permissive gate used in pipeline.py.
+        if match.mentions_specific_address:
             company_year = get_project_year(match.project_folder_name) or email_year
             existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, match.project_folder_name)
             try:
-                addr_match = classify_address(email, existing_addresses)
+                addr_match = classify_address(email, existing_addresses, match.project_folder_name)
                 print(f"  -> Address matched:   {addr_match.matched_existing}")
                 print(f"  -> Address folder:    {addr_match.address_folder_name}")
             except Exception as e:
