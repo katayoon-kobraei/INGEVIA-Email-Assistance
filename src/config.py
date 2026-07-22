@@ -58,6 +58,16 @@ ARCHIVE_JUNK_EMAILS = (os.environ.get("ARCHIVE_JUNK_EMAILS") or "true").lower() 
 # reuse an existing folder name.
 JUNK_ARCHIVE_FOLDER_NAME = os.environ.get("JUNK_ARCHIVE_FOLDER_NAME") or "IA - NO RELEVANTE"
 
+# When true, every relevant, incoming (ENTRANTE) email additionally
+# gets a cheap check for whether it's waiting on a reply. If so, it's
+# moved into a dedicated Outlook subfolder and logged to pendientes.csv.
+# Set to "false" in .env to turn this off.
+CHECK_PENDING_RESPONSES = (os.environ.get("CHECK_PENDING_RESPONSES") or "true").lower() == "true"
+
+# The subfolder emails needing a reply get moved into, created
+# automatically under the Inbox the first time it's needed.
+PENDING_FOLDER_NAME = os.environ.get("PENDING_FOLDER_NAME") or "PENDIENTE DE RESPUESTA"
+
 
 def ensure_output_root():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)

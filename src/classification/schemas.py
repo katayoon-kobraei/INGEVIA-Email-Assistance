@@ -32,6 +32,10 @@ class RelevanceResult(BaseModel):
     is_relevant: bool  # false = social media / marketing / automated noise -- not real client correspondence
 
 
+class PendingResult(BaseModel):
+    needs_response: bool  # true = this email is waiting on a written reply from the firm
+
+
 class ProjectMatchResult(BaseModel):
     matched_existing: bool
     project_folder_name: str
