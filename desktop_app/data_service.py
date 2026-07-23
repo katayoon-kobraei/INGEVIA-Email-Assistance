@@ -234,7 +234,7 @@ def load_outlook_flagged(limit: int = 250, fallback_scan_limit: int = 5000) -> O
                         break
                     try:
                         is_ours = PROCESSED_CATEGORY_NAME in _categories(item)
-                        completed = int(getattr(item, "FlagStatus", 0) or 0) == 1
+                        completed = int(getattr(item, "FlagStatus", 0) or 0) == 2
                     except Exception:
                         continue
                     if is_ours and completed:

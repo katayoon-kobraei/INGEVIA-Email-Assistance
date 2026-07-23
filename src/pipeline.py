@@ -30,6 +30,10 @@ from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def _retry_pending_flags():
     """Emails whose Outlook flag failed on a previous run (usually
@@ -189,7 +193,7 @@ def run():
                     company_year = get_project_year(project_folder_name) or email_year
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
                     try:
-                        addr_match = classify_address(email, existing_addresses)
+                        addr_match = classify_address(email, existing_addresses, project_folder_name)
                         if addr_match.matched_existing:
                             address_folder_name = addr_match.address_folder_name
                         elif is_formal_project_code(project_folder_name):

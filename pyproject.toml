@@ -6,6 +6,7 @@ dependencies = [
     "pywin32",
     "google-genai",
     "python-dotenv",
+    "openpyxl"
 ]
 
 [build-system]
