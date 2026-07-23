@@ -17,6 +17,10 @@ def _fetch_from_folder(outlook, folder_id, minutes_back, direction):
         timestamp = getattr(message, time_field)
         if timestamp < cutoff:
             break
+
+        was_unread = bool(message.UnRead)
+
+
         results.append({
             "id": message.EntryID,
             "subject": message.Subject,
@@ -27,6 +31,18 @@ def _fetch_from_folder(outlook, folder_id, minutes_back, direction):
             "attachments": message.Attachments,
             "direction": direction,
         })
+
+        # Reading .Body over IMAP silently marks the message read on the
+        # server. We're only inspecting it here, not something the boss
+        # actually opened -- put the unread/bold state back exactly as
+        # it was before we touched it.
+        if was_unread and not message.UnRead:
+            try:
+                message.UnRead = True
+                message.Save()
+            except Exception:
+                pass  # not critical -- worst case it just looks read
+            
     return results
 
 def get_recent_emails(minutes_back: int = 30) -> list[dict]:
