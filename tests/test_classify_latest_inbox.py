@@ -16,6 +16,13 @@ Where this goes: project root (same level as pyproject.toml).
 Run: python test_classify_latest_inbox.py
 """
 
+import sys
+from pathlib import Path
+
+# Makes 'src' importable regardless of where this script lives
+# (tests/ subfolder, project root, etc.) or how it's invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import win32com.client
 
 from src.config import OUTPUT_ROOT

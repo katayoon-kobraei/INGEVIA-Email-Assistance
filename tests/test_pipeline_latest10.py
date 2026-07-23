@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+# Makes 'src' importable regardless of where this script lives
+# (tests/ subfolder, project root, etc.) or how it's invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import win32com.client
 
 from src.config import (
@@ -32,7 +39,7 @@ from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
 
 INBOX_FOLDER_ID = 6
-COUNT = 3
+COUNT = 1
 
 
 def _get_latest_inbox_emails(count):
