@@ -68,6 +68,22 @@ CHECK_PENDING_RESPONSES = (os.environ.get("CHECK_PENDING_RESPONSES") or "true").
 # automatically under the Inbox the first time it's needed.
 PENDING_FOLDER_NAME = os.environ.get("PENDING_FOLDER_NAME") or "PENDIENTE DE RESPUESTA"
 
+# Path to the boss's reference spreadsheet (company + subfolder
+# descriptions -- see project_descriptions.py). Leave unset to disable
+# this entirely (classification just falls back to bare folder names,
+# like before). Safe to point at a file that grows every year -- only
+# the current email's own year ever gets read into a prompt, so
+# adding historical years back to 2008 does not increase per-email
+# token cost. e.g.:
+#   DESCRIPTIONS_XLSX_PATH=P:\Trabajo IA.xlsx
+DESCRIPTIONS_XLSX_PATH = os.environ.get("DESCRIPTIONS_XLSX_PATH") or ""
+
+# Max characters kept per company/subfolder description once loaded
+# from the spreadsheet -- this is the real lever on token cost, since
+# it applies per-company regardless of how many years of history the
+# spreadsheet holds. Cut at a sentence boundary when possible.
+DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS") or "220")
+
 
 def ensure_output_root():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)
