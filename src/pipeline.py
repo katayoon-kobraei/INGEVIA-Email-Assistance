@@ -12,9 +12,10 @@ from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
-from src.output.outlook_archive import archive_email
+from src.output.outlook_archive import archive_email, copy_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
+from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
 from src.output.project_folders import (
     list_existing_projects,
@@ -53,11 +54,10 @@ def _retry_pending_flags():
 
 def _retry_pending_archives():
     """Same idea as _retry_pending_flags(), but for emails whose move
-    to another Outlook folder failed last run -- covers both junk
-    (moved to JUNK_ARCHIVE_FOLDER_NAME) and pending-response emails
-    (moved to PENDING_FOLDER_NAME), since both just use archive_email()
-    under the hood and share the same retry-tracking file."""
-    if not (ARCHIVE_JUNK_EMAILS or CHECK_PENDING_RESPONSES):
+    to another Outlook folder failed last run -- this is junk mail
+    only now (moved to JUNK_ARCHIVE_FOLDER_NAME); pending-response
+    emails use their own copy-retry queue below instead."""
+    if not ARCHIVE_JUNK_EMAILS:
         return
     pending = load_pending_archive(OUTPUT_ROOT)
     if not pending:
@@ -67,6 +67,23 @@ def _retry_pending_archives():
         if archive_email(entry_id, folder_name):
             remove_pending_archive(OUTPUT_ROOT, entry_id)
             print(f"  Moved on retry: {entry_id} -> {folder_name}")
+
+
+def _retry_pending_copies():
+    """Same idea, but for pending-response emails whose COPY into
+    PENDING_FOLDER_NAME failed last run (e.g. Outlook was busy on
+    that item at that moment). The original stays in the Inbox either
+    way -- this only retries getting the copy into the pending folder."""
+    if not CHECK_PENDING_RESPONSES:
+        return
+    pending = load_pending_copies(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
+    for entry_id, folder_name in list(pending.items()):
+        if copy_email(entry_id, folder_name):
+            remove_pending_copy(OUTPUT_ROOT, entry_id)
+            print(f"  Copied on retry: {entry_id} -> {folder_name}")
 
 
 def _mark_done(email):
@@ -111,8 +128,9 @@ def _handle_pending_check(email):
     whether it's still waiting on a written reply. Only meaningful for
     incoming mail -- something the firm itself sent doesn't need a
     reply FROM the firm. If it needs a reply: log it to pendientes.csv
-    and move it (in Outlook) into PENDING_FOLDER_NAME, reusing the
-    same move/retry machinery as junk-archiving."""
+    and put a COPY of it (in Outlook) into PENDING_FOLDER_NAME -- the
+    original stays in the Inbox, unlike junk archiving which moves the
+    original out."""
     if not CHECK_PENDING_RESPONSES or email.get("direction") != "ENTRANTE":
         return
     try:
@@ -124,12 +142,12 @@ def _handle_pending_check(email):
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
-    ok = archive_email(email["id"], PENDING_FOLDER_NAME)
+    ok = copy_email(email["id"], PENDING_FOLDER_NAME)
     if ok:
-        remove_pending_archive(OUTPUT_ROOT, email["id"])
+        remove_pending_copy(OUTPUT_ROOT, email["id"])
     else:
-        add_pending_archive(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
-        print(f"  (Move to pending folder failed -- will retry automatically next run)")
+        add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
+        print(f"  (Copy to pending folder failed -- will retry automatically next run)")
     print(f"  Marked as PENDING RESPONSE: {email['subject']}")
 
 
@@ -137,6 +155,7 @@ def run():
     ensure_output_root()
     _retry_pending_flags()
     _retry_pending_archives()
+    _retry_pending_copies()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = get_recent_emails(20)
     print(f"Found {len(emails)} email(s), {len(processed)} already processed.")

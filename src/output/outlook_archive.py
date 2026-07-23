@@ -25,6 +25,33 @@ def _get_or_create_archive_folder(inbox, folder_name):
     return inbox.Folders.Add(folder_name)
 
 
+def _try_copy_once(entry_id, folder_name):
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
+    item = outlook.GetItemFromID(entry_id)
+    target_folder = _get_or_create_archive_folder(inbox, folder_name)
+    copied_item = item.Copy()
+    copied_item.Move(target_folder)
+
+def copy_email(entry_id, folder_name):
+    """Same idea as archive_email, but leaves the original where it is
+    -- puts a COPY in folder_name instead of moving the original out
+    of the Inbox. Used for pending-response emails, which should stay
+    visible in the Inbox as well as show up in the pending folder."""
+    try:
+        _try_copy_once(entry_id, folder_name)
+        return True
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        _try_copy_once(entry_id, folder_name)
+        return True
+    except Exception as e:
+        print(f"Could not copy email {entry_id} in Outlook: {e}")
+        return False
+
+
 def _try_archive_once(entry_id, folder_name):
     outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
