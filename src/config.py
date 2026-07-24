@@ -56,7 +56,7 @@ ARCHIVE_JUNK_EMAILS = (os.environ.get("ARCHIVE_JUNK_EMAILS") or "true").lower() 
 # The subfolder junk gets moved into, created automatically under the
 # Inbox the first time it's needed. Change it in .env if you'd rather
 # reuse an existing folder name.
-JUNK_ARCHIVE_FOLDER_NAME = os.environ.get("JUNK_ARCHIVE_FOLDER_NAME") or "IA - NO RELEVANTE"
+JUNK_ARCHIVE_FOLDER_NAME = os.environ.get("JUNK_ARCHIVE_FOLDER_NAME") or "Archivo"
 
 # When true, every relevant, incoming (ENTRANTE) email additionally
 # gets a cheap check for whether it's waiting on a reply. If so, it's
@@ -83,6 +83,12 @@ DESCRIPTIONS_XLSX_PATH = os.environ.get("DESCRIPTIONS_XLSX_PATH") or ""
 # it applies per-company regardless of how many years of history the
 # spreadsheet holds. Cut at a sentence boundary when possible.
 DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS") or "220")
+
+
+DEPARTMENT_SECRETARIA_DOMAIN = os.environ.get("DEPARTMENT_SECRETARIA_DOMAIN") or ""
+
+
+DEPARTMENT_SECRETARIA_FOLDER_NAME = os.environ.get("DEPARTMENT_SECRETARIA_FOLDER_NAME") or "SECRETARIA"
 
 
 def ensure_output_root():

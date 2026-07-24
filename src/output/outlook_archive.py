@@ -18,6 +18,44 @@ import win32com.client
 INBOX_FOLDER_ID = 6
 
 
+def _get_or_create_top_level_folder(outlook, folder_name):
+    """Looks for folder_name as a top-level folder at the account root
+    (a sibling of Inbox, Sent Items, etc.), not nested inside Inbox --
+    this is where Outlook's own built-in Archive button puts things."""
+    inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
+    store_root = inbox.Parent
+    for f in store_root.Folders:
+        if f.Name == folder_name:
+            return f
+    return store_root.Folders.Add(folder_name)
+
+
+def _try_archive_top_level_once(entry_id, folder_name):
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    item = outlook.GetItemFromID(entry_id)
+    archive_folder = _get_or_create_top_level_folder(outlook, folder_name)
+    item.Move(archive_folder)
+
+
+def archive_to_top_level(entry_id, folder_name):
+    """Same retry behavior as archive_email, but moves into a
+    top-level folder (a sibling of Inbox) instead of a subfolder
+    nested inside it -- used for junk mail, so it lands in Outlook's
+    real Archive folder rather than a custom subfolder."""
+    try:
+        _try_archive_top_level_once(entry_id, folder_name)
+        return True
+    except Exception:
+        pass
+    time.sleep(1)
+    try:
+        _try_archive_top_level_once(entry_id, folder_name)
+        return True
+    except Exception as e:
+        print(f"Could not archive email {entry_id} to top-level folder in Outlook: {e}")
+        return False
+
+
 def _get_or_create_archive_folder(inbox, folder_name):
     for f in inbox.Folders:
         if f.Name == folder_name:

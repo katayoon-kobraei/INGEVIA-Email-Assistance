@@ -17,6 +17,9 @@ from src.output.flag_state import load_pending_flags, add_pending_flag, remove_p
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
+from src.output.department_routing import match_department
+from src.output.outlook_archive import archive_email, copy_email, archive_to_top_level
+from src.output.save_email import save_email, save_department_email
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -104,10 +107,6 @@ def _mark_done(email):
 
 
 def _handle_junk(email):
-    """Marks a junk/irrelevant email as processed locally, then either
-    moves it out of the Inbox into the archive subfolder (default) or
-    just flags it in place if ARCHIVE_JUNK_EMAILS is off. A failed
-    move is queued to retry automatically next run, same as flags."""
     mark_processed(email["id"], OUTPUT_ROOT)
 
     if not ARCHIVE_JUNK_EMAILS:
@@ -115,13 +114,14 @@ def _handle_junk(email):
             mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
         return
 
-    ok = archive_email(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+    ok = archive_to_top_level(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
     if ok:
         remove_pending_archive(OUTPUT_ROOT, email["id"])
     else:
         add_pending_archive(OUTPUT_ROOT, email["id"], JUNK_ARCHIVE_FOLDER_NAME)
         print(f"  (Archive move failed -- will retry automatically next run)")
 
+        
 
 def _handle_pending_check(email):
     """After a relevant email is filed, run a cheap separate check for
@@ -164,6 +164,25 @@ def run():
         if email["id"] in processed:
             continue
         try:
+            # Deterministic department routing (no LLM, no cost) --
+            # runs before anything else. If the sender's domain
+            # matches a configured department (e.g. the secretary),
+            # file it straight into that department's folder and skip
+            # relevance/project/address/pending classification
+            # entirely -- this isn't client correspondence.
+            department_folder_name = match_department(email)
+            if department_folder_name:
+                folder = save_department_email(email, department_folder_name, OUTPUT_ROOT)
+                _mark_done(email)
+                ok = copy_email(email["id"], department_folder_name)
+                if ok:
+                    remove_pending_copy(OUTPUT_ROOT, email["id"])
+                else:
+                    add_pending_copy(OUTPUT_ROOT, email["id"], department_folder_name)
+                    print(f"  (Copy to '{department_folder_name}' failed -- will retry automatically next run)")
+                print(f"Saved (department: {department_folder_name}): {email['subject']} -> {folder}")
+                continue
+
             # Cheap first-pass filter: a short, separate prompt with
             # no folder structure, no matching rules -- just "is this
             # real correspondence or noise?". This runs on EVERY

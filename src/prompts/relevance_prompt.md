@@ -14,11 +14,7 @@ Set is_relevant = false for anything that is not that, including:
     weekly/daily platform digests.
   - Marketing, newsletters, promotions, sales outreach, or advertising from companies you are not
     actively working with.
-  - Automated/system notifications with no human decision content: calendar accept/decline
-    receipts, read receipts, delivery/bounce notifications, password resets, app/service login
-    alerts, one-time passcodes, subscription or SaaS billing receipts unrelated to a project.
   - Spam, phishing, or anything clearly not addressed to the firm as a professional counterpart.
-  - Purely personal, non-work correspondence.
 
 When in doubt between "real but minor correspondence" and "noise", prefer is_relevant = true:
 only mark something false when it is clearly automated, promotional, or from a social platform,

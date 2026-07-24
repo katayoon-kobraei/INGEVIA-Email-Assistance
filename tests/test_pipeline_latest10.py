@@ -18,6 +18,8 @@ from src.output.flag_state import load_pending_flags, add_pending_flag, remove_p
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.pending_list import append_to_pending_list
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
+from src.output.department_routing import match_department
+from src.output.save_email import save_email, save_department_email
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -31,6 +33,11 @@ from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
+from src.output.outlook_archive import archive_email, copy_email, archive_to_top_level
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 INBOX_FOLDER_ID = 6
 COUNT = 3
@@ -112,7 +119,7 @@ def _handle_junk(email):
             mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
         return
 
-    ok = archive_email(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
+    ok = archive_to_top_level(email["id"], JUNK_ARCHIVE_FOLDER_NAME)
     if ok:
         remove_pending_archive(OUTPUT_ROOT, email["id"])
         print(f"  (Moved to '{JUNK_ARCHIVE_FOLDER_NAME}' OK)")
@@ -142,10 +149,24 @@ def _handle_pending_check(email):
         add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
         print("  (Copy to pending folder FAILED -- queued to retry next run)")
 
+
+def _retry_pending_copies():
+    if not CHECK_PENDING_RESPONSES:
+        return
+    pending = load_pending_copies(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
+    for entry_id, folder_name in list(pending.items()):
+        if copy_email(entry_id, folder_name):
+            remove_pending_copy(OUTPUT_ROOT, entry_id)
+            print(f"  Copied on retry: {entry_id} -> {folder_name}")
+
 def run():
     ensure_output_root()
     _retry_pending_flags()
     _retry_pending_archives()
+    _retry_pending_copies()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = _get_latest_inbox_emails(COUNT)
     print(f"Testing pipeline on the {len(emails)} latest Inbox email(s) (ignoring time), {len(processed)} already processed.")
@@ -155,6 +176,20 @@ def run():
             print(f"Skipping (already processed): {email['subject']}")
             continue
         try:
+            department_folder_name = match_department(email)
+            if department_folder_name:
+                folder = save_department_email(email, department_folder_name, OUTPUT_ROOT)
+                _mark_done(email)
+                ok = copy_email(email["id"], department_folder_name)
+                if ok:
+                    remove_pending_copy(OUTPUT_ROOT, email["id"])
+                    print(f"  (Copied to '{department_folder_name}' OK)")
+                else:
+                    add_pending_copy(OUTPUT_ROOT, email["id"], department_folder_name)
+                    print(f"  (Copy to '{department_folder_name}' failed -- queued to retry next run)")
+                print(f"Saved (department: {department_folder_name}): {email['subject']} -> {folder}")
+                continue
+
             try:
                 relevance = classify_relevance(email)
             except Exception as e:
