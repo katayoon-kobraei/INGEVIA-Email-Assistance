@@ -1,5 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Priority(str, Enum):
@@ -47,3 +48,6 @@ class ProjectMatchResult(BaseModel):
 class AddressMatchResult(BaseModel):
     matched_existing: bool
     address_folder_name: str   # bare name, no code prefix -- e.g. "CAMÍ DE FAITANAR 2 - PICAÑA"
+
+class PriorityScoreResult(BaseModel):
+    priority: int = Field(ge=1, le=5)  # 1 = low urgency, 5 = most urgent

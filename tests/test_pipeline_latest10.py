@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import win32com.client
 
 from src.config import (
@@ -10,16 +14,16 @@ from src.config import (
     CHECK_PENDING_RESPONSES,
     PENDING_FOLDER_NAME,
 )
-from src.output.save_email import save_email
+from src.output.save_email import save_email, save_department_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
-from src.output.outlook_archive import archive_email, copy_email
+from src.output.outlook_archive import archive_email, copy_email, archive_to_top_level
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.pending_list import append_to_pending_list
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
+from src.output.priority_list import append_to_priority_list
 from src.output.department_routing import match_department
-from src.output.save_email import save_email, save_department_email
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -29,15 +33,11 @@ from src.output.project_folders import (
 )
 from src.classification.relevance_agent import classify_relevance
 from src.classification.pending_agent import classify_pending
+from src.classification.priority_agent import classify_priority
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
-from src.output.outlook_archive import archive_email, copy_email, archive_to_top_level
-
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 INBOX_FOLDER_ID = 6
 COUNT = 3
@@ -84,7 +84,7 @@ def _retry_pending_flags():
 
 
 def _retry_pending_archives():
-    if not (ARCHIVE_JUNK_EMAILS or CHECK_PENDING_RESPONSES):
+    if not ARCHIVE_JUNK_EMAILS:
         return
     pending = load_pending_archive(OUTPUT_ROOT)
     if not pending:
@@ -94,6 +94,19 @@ def _retry_pending_archives():
         if archive_email(entry_id, folder_name):
             remove_pending_archive(OUTPUT_ROOT, entry_id)
             print(f"  Moved on retry: {entry_id} -> {folder_name}")
+
+
+def _retry_pending_copies():
+    if not CHECK_PENDING_RESPONSES:
+        return
+    pending = load_pending_copies(OUTPUT_ROOT)
+    if not pending:
+        return
+    print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
+    for entry_id, folder_name in list(pending.items()):
+        if copy_email(entry_id, folder_name):
+            remove_pending_copy(OUTPUT_ROOT, entry_id)
+            print(f"  Copied on retry: {entry_id} -> {folder_name}")
 
 
 def _mark_done(email):
@@ -150,17 +163,18 @@ def _handle_pending_check(email):
         print("  (Copy to pending folder FAILED -- queued to retry next run)")
 
 
-def _retry_pending_copies():
-    if not CHECK_PENDING_RESPONSES:
+def _handle_priority_check(email):
+    """Cheap urgency score (1-5) for anything that passed the junk
+    filter. Purely informational -- doesn't affect filing or Outlook
+    state, just logs to priorities.csv for the UI to read."""
+    try:
+        result = classify_priority(email)
+    except Exception as e:
+        print(f"Priority check failed for {email['subject']}: {e}")
         return
-    pending = load_pending_copies(OUTPUT_ROOT)
-    if not pending:
-        return
-    print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
-    for entry_id, folder_name in list(pending.items()):
-        if copy_email(entry_id, folder_name):
-            remove_pending_copy(OUTPUT_ROOT, entry_id)
-            print(f"  Copied on retry: {entry_id} -> {folder_name}")
+    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
+    print(f"  Priority: {result.priority}/5")
+
 
 def run():
     ensure_output_root()
@@ -235,6 +249,7 @@ def run():
             print(f"Saved: {email['subject']} -> {folder}")
 
             _handle_pending_check(email)
+            _handle_priority_check(email)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue

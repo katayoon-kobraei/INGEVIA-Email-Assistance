@@ -20,6 +20,8 @@ from src.output.pending_list import append_to_pending_list
 from src.output.department_routing import match_department
 from src.output.outlook_archive import archive_email, copy_email, archive_to_top_level
 from src.output.save_email import save_email, save_department_email
+from src.classification.priority_agent import classify_priority
+from src.output.priority_list import append_to_priority_list
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -121,7 +123,18 @@ def _handle_junk(email):
         add_pending_archive(OUTPUT_ROOT, email["id"], JUNK_ARCHIVE_FOLDER_NAME)
         print(f"  (Archive move failed -- will retry automatically next run)")
 
-        
+def _handle_priority_check(email):
+    """Cheap urgency score (1-5) for anything that passed the junk
+    filter. Purely informational -- doesn't affect filing or Outlook
+    state, just logs to priorities.csv for the UI to read."""
+    try:
+        result = classify_priority(email)
+    except Exception as e:
+        print(f"Priority check failed for {email['subject']}: {e}")
+        return
+    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
+    print(f"  Priority: {result.priority}/5")        
+
 
 def _handle_pending_check(email):
     """After a relevant email is filed, run a cheap separate check for
