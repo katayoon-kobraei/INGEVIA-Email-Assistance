@@ -22,6 +22,7 @@ from src.output.outlook_archive import archive_email, copy_email, archive_to_top
 from src.output.save_email import save_email, save_department_email
 from src.classification.priority_agent import classify_priority
 from src.output.priority_list import append_to_priority_list
+from src.output.department_routing import match_department, should_ignore
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -194,6 +195,10 @@ def run():
                     add_pending_copy(OUTPUT_ROOT, email["id"], department_folder_name)
                     print(f"  (Copy to '{department_folder_name}' failed -- will retry automatically next run)")
                 print(f"Saved (department: {department_folder_name}): {email['subject']} -> {folder}")
+                continue
+            if should_ignore(email):
+                mark_processed(email["id"], OUTPUT_ROOT)
+                print(f"Ignored (internal domain): {email['subject']}")
                 continue
 
             # Cheap first-pass filter: a short, separate prompt with

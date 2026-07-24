@@ -24,6 +24,7 @@ from src.output.pending_list import append_to_pending_list
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.priority_list import append_to_priority_list
 from src.output.department_routing import match_department
+from src.output.department_routing import match_department, should_ignore
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -202,6 +203,11 @@ def run():
                     add_pending_copy(OUTPUT_ROOT, email["id"], department_folder_name)
                     print(f"  (Copy to '{department_folder_name}' failed -- queued to retry next run)")
                 print(f"Saved (department: {department_folder_name}): {email['subject']} -> {folder}")
+                continue
+
+            if should_ignore(email):
+                mark_processed(email["id"], OUTPUT_ROOT)
+                print(f"Ignored (internal domain): {email['subject']}")
                 continue
 
             try:

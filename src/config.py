@@ -84,11 +84,13 @@ DESCRIPTIONS_XLSX_PATH = os.environ.get("DESCRIPTIONS_XLSX_PATH") or ""
 # spreadsheet holds. Cut at a sentence boundary when possible.
 DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS") or "220")
 
-
-DEPARTMENT_SECRETARIA_DOMAIN = os.environ.get("DEPARTMENT_SECRETARIA_DOMAIN") or ""
-
+DEPARTMENT_SECRETARIA_EMAIL = os.environ.get("DEPARTMENT_SECRETARIA_EMAIL") or ""
 
 DEPARTMENT_SECRETARIA_FOLDER_NAME = os.environ.get("DEPARTMENT_SECRETARIA_FOLDER_NAME") or "SECRETARIA"
+
+DEPARTMENT_OUTPUT_ROOT = os.environ.get("DEPARTMENT_OUTPUT_ROOT") or r"X:\EMAILS"
+
+IGNORE_DOMAINS = os.environ.get("IGNORE_DOMAINS") or "ingevia.com"
 
 
 def ensure_output_root():
