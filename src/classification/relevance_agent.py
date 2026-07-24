@@ -2,7 +2,7 @@ from pathlib import Path
 
 from google.genai import types
 
-from src.gemini_client import client
+from src.gemini_client import generate_content_with_retry
 from src.classification.schemas import RelevanceResult
 from src.config import GEMINI_MODEL
 
@@ -22,7 +22,7 @@ def classify_relevance(email):
         f"{RELEVANCE_RUBRIC}\n\n"
         f"Direction: {email['direction']}\nEmail subject: {email['subject']}\nContact: {contact}\n\n{email['body']}"
     )
-    response = client.models.generate_content(
+    response = generate_content_with_retry(
         model=GEMINI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(

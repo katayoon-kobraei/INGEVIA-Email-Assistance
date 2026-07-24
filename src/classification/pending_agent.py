@@ -2,7 +2,7 @@ from pathlib import Path
 
 from google.genai import types
 
-from src.gemini_client import client
+from src.gemini_client import generate_content_with_retry
 from src.classification.schemas import PendingResult
 from src.config import GEMINI_MODEL
 
@@ -19,7 +19,7 @@ def classify_pending(email):
         f"{PENDING_RUBRIC}\n\n"
         f"Email subject: {email['subject']}\nFrom: {email.get('sender')}\n\n{email['body']}"
     )
-    response = client.models.generate_content(
+    response = generate_content_with_retry(
         model=GEMINI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(

@@ -13,10 +13,11 @@ from src.config import (
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
-from src.output.outlook_archive import archive_email
+from src.output.outlook_archive import archive_email, copy_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.pending_list import append_to_pending_list
+from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -133,14 +134,13 @@ def _handle_pending_check(email):
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
-    ok = archive_email(email["id"], PENDING_FOLDER_NAME)
+    ok = copy_email(email["id"], PENDING_FOLDER_NAME)
     if ok:
-        remove_pending_archive(OUTPUT_ROOT, email["id"])
-        print(f"  (Moved to '{PENDING_FOLDER_NAME}' OK -- logged to pendientes.csv)")
+        remove_pending_copy(OUTPUT_ROOT, email["id"])
+        print(f"  (Copied to '{PENDING_FOLDER_NAME}' OK -- logged to pendientes.csv)")
     else:
-        add_pending_archive(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
-        print("  (Move to pending folder FAILED -- queued to retry next run)")
-
+        add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
+        print("  (Copy to pending folder FAILED -- queued to retry next run)")
 
 def run():
     ensure_output_root()
