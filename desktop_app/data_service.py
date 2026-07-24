@@ -15,10 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(ENV_PATH)
 
-OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", r"C:\EmailAssistant\Output"))
-ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT", str(OUTPUT_ROOT)))
-PROCESSED_CATEGORY_NAME = os.environ.get("PROCESSED_CATEGORY_NAME", "IA - PROCESADO")
-FLAG_PROCESSED_EMAILS = os.environ.get("FLAG_PROCESSED_EMAILS", "true").lower() == "true"
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT") or r"C:\EmailAssistant\Output")
+ARCHIVE_ROOT = Path(os.environ.get("ARCHIVE_ROOT") or str(OUTPUT_ROOT))
+PROCESSED_CATEGORY_NAME = os.environ.get("PROCESSED_CATEGORY_NAME") or "IA - PROCESADO"
+FLAG_PROCESSED_EMAILS = (os.environ.get("FLAG_PROCESSED_EMAILS") or "true").lower() == "true"
 TASK_NAME = "Email AI Assistant"
 
 
@@ -44,6 +44,41 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
 
 
+def _priority_key(date_text: str | None, subject: str | None) -> tuple[str, str]:
+    """Return the stable key shared by index.csv and priorities.csv."""
+    return (
+        str(date_text or "").strip(),
+        " ".join(str(subject or "").split()).casefold(),
+    )
+
+
+def load_priority_lookup() -> dict[tuple[str, str], int]:
+    """Load priority scores keyed by email date and subject.
+
+    The priority backend writes ``priorities.csv`` separately from
+    ``index.csv``. Both files contain the same minute-level timestamp and
+    subject, so the desktop UI can join them without changing the archive
+    format created by the backend. The last score wins if a row is repeated.
+    """
+    path = OUTPUT_ROOT / "priorities.csv"
+    if not path.exists():
+        return {}
+
+    lookup: dict[tuple[str, str], int] = {}
+    try:
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    priority = int(row.get("Priority") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= priority <= 5:
+                    lookup[_priority_key(row.get("Date"), row.get("Subject"))] = priority
+    except OSError:
+        return {}
+    return lookup
+
+
 def load_index_rows() -> list[dict[str, Any]]:
     index_path = OUTPUT_ROOT / "index.csv"
     if not index_path.exists():
@@ -52,8 +87,16 @@ def load_index_rows() -> list[dict[str, Any]]:
     with index_path.open("r", newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
 
+    priority_lookup = load_priority_lookup()
+
     for row in rows:
         row["_parsed_date"] = _parse_date(row.get("Date"))
+        priority = priority_lookup.get(
+            _priority_key(row.get("Date"), row.get("Subject")),
+            0,
+        )
+        row["Priority"] = priority if priority else ""
+        row["_priority"] = priority
         try:
             row["_attachment_count"] = int(row.get("Attachments") or 0)
         except (TypeError, ValueError):

@@ -149,6 +149,7 @@ class DetailDrawer(QFrame):
             ("Topic", "TOPIC"),
             ("Subject", "SUBJECT"),
             ("Attachments", "ATTACHMENTS"),
+            ("Priority", "PRIORITY"),
             ("_status", "STATUS"),
         ):
             label = QLabel(caption)
@@ -177,6 +178,8 @@ class DetailDrawer(QFrame):
             value = record.get(key, "") or "—"
             if key == "Direction":
                 value = direction_label(str(value))
+            elif key == "Priority":
+                value = priority_label(value)
             elif key == "_status":
                 value = "Review" if value == "REVISAR" else "Processed"
             label.setText(str(value))
@@ -275,8 +278,10 @@ class DashboardPage(QWidget):
         activity_title = QLabel("Recent activity")
         activity_title.setObjectName("SectionTitle")
         activity_layout.addWidget(activity_title)
-        self.recent_table = QTableWidget(0, 5)
-        self.recent_table.setHorizontalHeaderLabels(["Date", "Direction", "Project", "Subject", "Status"])
+        self.recent_table = QTableWidget(0, 6)
+        self.recent_table.setHorizontalHeaderLabels(
+            ["Date", "Direction", "Project", "Subject", "Priority", "Status"]
+        )
         configure_table(self.recent_table)
         self.recent_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         activity_layout.addWidget(self.recent_table)
@@ -344,12 +349,24 @@ class DashboardPage(QWidget):
                 direction_label(record.get("Direction", "")),
                 record.get("Project Folder", ""),
                 record.get("Subject", ""),
+                priority_label(record.get("_priority")),
                 "Review" if record.get("_status") == "REVISAR" else "Processed",
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                if column == 4:
-                    item.setForeground(QColor("#b26a00" if record.get("_status") == "REVISAR" else "#087443"))
+                apply_priority_style(
+                    item,
+                    record.get("_priority"),
+                    emphasize=column == 4,
+                )
+                if column == 5:
+                    item.setForeground(
+                        QColor(
+                            "#b26a00"
+                            if record.get("_status") == "REVISAR"
+                            else "#087443"
+                        )
+                    )
                 self.recent_table.setItem(row, column, item)
 
     def update_flagged(self, summary: data_service.OutlookFlagSummary) -> None:
@@ -378,8 +395,13 @@ class EmailsPage(QWidget):
         heading.setObjectName("PageTitle")
         subtitle = QLabel("Search, filter, and open the folder associated with each processed email.")
         subtitle.setObjectName("PageSubtitle")
+        priority_legend = QLabel(
+            "Priority: 5 critical (red) · 4 high (orange) · 3 normal (yellow)"
+        )
+        priority_legend.setObjectName("MutedText")
         outer.addWidget(heading)
         outer.addWidget(subtitle)
+        outer.addWidget(priority_legend)
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -398,9 +420,18 @@ class EmailsPage(QWidget):
 
         body = QHBoxLayout()
         body.setSpacing(12)
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["Date", "Direction", "Project", "Contact", "Subject", "Attachments", "Status"]
+            [
+                "Date",
+                "Direction",
+                "Project",
+                "Contact",
+                "Subject",
+                "Attachments",
+                "Priority",
+                "Status",
+            ]
         )
         configure_table(self.table)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
@@ -439,7 +470,14 @@ class EmailsPage(QWidget):
         for record in self.all_rows:
             haystack = " ".join(
                 str(record.get(key, ""))
-                for key in ("Subject", "Contact", "Project Folder", "Topic", "Sender/Recipient")
+                for key in (
+                    "Subject",
+                    "Contact",
+                    "Project Folder",
+                    "Topic",
+                    "Sender/Recipient",
+                    "Priority",
+                )
             ).lower()
             if query and query not in haystack:
                 continue
@@ -466,14 +504,26 @@ class EmailsPage(QWidget):
                 record.get("Contact", ""),
                 record.get("Subject", ""),
                 record.get("Attachments", "0"),
+                priority_label(record.get("_priority")),
                 "Review" if record.get("_status") == "REVISAR" else "Processed",
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if column == 0:
                     item.setData(Qt.UserRole, record)
-                if column == 6:
-                    item.setForeground(QColor("#b26a00" if record.get("_status") == "REVISAR" else "#087443"))
+                apply_priority_style(
+                    item,
+                    record.get("_priority"),
+                    emphasize=column == 6,
+                )
+                if column == 7:
+                    item.setForeground(
+                        QColor(
+                            "#b26a00"
+                            if record.get("_status") == "REVISAR"
+                            else "#087443"
+                        )
+                    )
                 self.table.setItem(row, column, item)
 
     def _selected_record(self) -> dict[str, Any] | None:
@@ -976,6 +1026,51 @@ def direction_label(value: str) -> str:
     if value == "SALIENTE":
         return "Outgoing"
     return value
+
+
+def priority_label(value: Any) -> str:
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        return "—"
+
+    labels = {
+        5: "5 - Critical",
+        4: "4 - High",
+        3: "3 - Normal",
+        2: "2 - Low",
+        1: "1 - Very low",
+    }
+    return labels.get(priority, str(priority))
+
+
+def apply_priority_style(
+    item: QTableWidgetItem,
+    value: Any,
+    *,
+    emphasize: bool = False,
+) -> None:
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        return
+
+    palette = {
+        5: ("#ffe4e6", "#fecdd3", "#9f1239"),
+        4: ("#ffedd5", "#fed7aa", "#9a3412"),
+        3: ("#fef9c3", "#fef08a", "#854d0e"),
+    }
+    colors = palette.get(priority)
+    if not colors:
+        return
+
+    row_background, strong_background, foreground = colors
+    item.setBackground(QColor(strong_background if emphasize else row_background))
+    item.setForeground(QColor(foreground))
+    if emphasize:
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
 
 
 def add_setting_row(layout: QVBoxLayout, title: str, value: str) -> QLabel:
