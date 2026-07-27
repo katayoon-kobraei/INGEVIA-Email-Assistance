@@ -7,6 +7,40 @@ from src.output.folder_namer import build_conversation_folder_name
 from src.safety.attachment_scanner import check_attachment
 from src.output.project_folders import resolve_project_relative_path
 
+import win32com.client
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Preformatted
+
+OL_SAVE_AS_MSG = 3  # OlSaveAsType.olMSG
+
+
+def _save_as_msg(entry_id, folder_path):
+    """Saves a native Outlook .msg copy alongside the .txt/.pdf
+    versions -- re-fetches the live item by EntryID, same pattern
+    used in outlook_flag.py/outlook_archive.py."""
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        item = outlook.GetItemFromID(entry_id)
+        item.SaveAs(os.path.join(folder_path, "email.msg"), OL_SAVE_AS_MSG)
+    except Exception as e:
+        print(f"Could not save .msg copy for {entry_id}: {e}")
+
+
+def _save_as_pdf(text_content, folder_path):
+    """Renders the same plain-text content written to email.txt into
+    a simple PDF -- a print-ready copy alongside it."""
+    try:
+        pdf_path = os.path.join(folder_path, "email.pdf")
+        doc = SimpleDocTemplate(pdf_path, pagesize=LETTER)
+        style = getSampleStyleSheet()["Code"]
+        doc.build([Preformatted(text_content, style)])
+    except Exception as e:
+        print(f"Could not save PDF copy in {folder_path}: {e}")
+
+
+
+
 QUARANTINE_ROOT = r"C:\EmailAssistant\Quarantine"
 
 
@@ -43,9 +77,15 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
     )
     folder_path = _make_unique_folder(base_path)
 
+    text_content = (
+        (f"From: {email['sender']}\n" if email["direction"] == "ENTRANTE" else f"To: {email['recipient']}\n")
+        + f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}"
+    )
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
-        f.write(f"From: {email['sender']}\n" if email["direction"] == "ENTRANTE" else f"To: {email['recipient']}\n")
-        f.write(f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}")
+        f.write(text_content)
+
+    _save_as_msg(email["id"], folder_path)
+    _save_as_pdf(text_content, folder_path)
 
     attachment_results = []
     attachments = email["attachments"]
@@ -89,10 +129,17 @@ def save_department_email(email, department_folder_name, output_root):
     )
     folder_path = _make_unique_folder(base_path)
 
+    text_content = (
+        (f"From: {email['sender']}\n" if email["direction"] == "ENTRANTE" else f"To: {email['recipient']}\n")
+        + f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}"
+    )
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
-        f.write(f"From: {email['sender']}\n" if email["direction"] == "ENTRANTE" else f"To: {email['recipient']}\n")
-        f.write(f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}")
+        f.write(text_content)
 
+    _save_as_msg(email["id"], folder_path)
+    _save_as_pdf(text_content, folder_path)
+
+    
     attachment_results = []
     attachments = email["attachments"]
     with tempfile.TemporaryDirectory() as tmp_dir:
