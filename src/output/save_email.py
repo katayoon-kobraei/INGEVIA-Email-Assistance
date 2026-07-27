@@ -15,6 +15,49 @@ from reportlab.platypus import SimpleDocTemplate, Preformatted
 OL_SAVE_AS_MSG = 3  # OlSaveAsType.olMSG
 
 
+def save_billing_email(email, output_root):
+    """Files an external billing/procurement email directly under
+    BILLING_OUTPUT_ROOT -- no project-folder resolution."""
+    base_path = os.path.join(
+        output_root,
+        email["direction"],
+        build_conversation_folder_name(email, email.get("sender") or "DESCONOCIDO", "FACTURACION"),
+    )
+    folder_path = _make_unique_folder(base_path)
+
+    with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
+        f.write(f"From: {email['sender']}\n")
+        f.write(f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}")
+
+    attachment_results = []
+    attachments = email["attachments"]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for i in range(1, attachments.Count + 1):
+            attachment = attachments.Item(i)
+            tmp_path = os.path.join(tmp_dir, attachment.FileName)
+            attachment.SaveAsFile(tmp_path)
+            is_safe, reason = check_attachment(tmp_path)
+            if is_safe:
+                shutil.move(tmp_path, os.path.join(folder_path, attachment.FileName))
+                attachment_results.append({"filename": attachment.FileName, "status": "saved", "reason": reason})
+            else:
+                os.makedirs(QUARANTINE_ROOT, exist_ok=True)
+                shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{attachment.FileName}"))
+                attachment_results.append({"filename": attachment.FileName, "status": "quarantined", "reason": reason})
+
+    metadata = {
+        "id": email["id"], "direction": email["direction"],
+        "sender": email.get("sender"), "subject": email["subject"],
+        "timestamp": email["timestamp"].isoformat(),
+        "category": "FACTURACION_EXTERNA",
+        "attachments": attachment_results,
+    }
+    with open(os.path.join(folder_path, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    return folder_path
+
+
+
 def _save_as_msg(entry_id, folder_path):
     """Saves a native Outlook .msg copy alongside the .txt/.pdf
     versions -- re-fetches the live item by EntryID, same pattern
@@ -139,7 +182,7 @@ def save_department_email(email, department_folder_name, output_root):
     _save_as_msg(email["id"], folder_path)
     _save_as_pdf(text_content, folder_path)
 
-    
+
     attachment_results = []
     attachments = email["attachments"]
     with tempfile.TemporaryDirectory() as tmp_dir:

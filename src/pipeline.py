@@ -14,6 +14,13 @@ from src.output.outlook_archive import archive_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
 from src.output.pending_list import append_to_pending_list
+from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient
+from src.classification.billing_agent import classify_billing
+from src.output.save_email import save_email, save_billing_email
+from src.output.outlook_forward import forward_email
+from src.config import BOSS_EMAIL, ADMINISTRACION_EMAIL, BILLING_OUTPUT_ROOT
+from src.classification.priority_agent import classify_priority
+from src.output.priority_list import append_to_priority_list
 from src.output.project_folders import (
     list_existing_projects,
     list_existing_addresses,
@@ -31,6 +38,18 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
+def _handle_priority_check(email):
+    """Cheap urgency score (1-5) for anything that got filed. Purely
+    informational -- doesn't affect filing or Outlook state, just logs
+    to priorities.csv for the desktop UI to read."""
+    try:
+        result = classify_priority(email)
+    except Exception as e:
+        print(f"Priority check failed for {email['subject']}: {e}")
+        return
+    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
+    print(f"  Priority: {result.priority}/5")
 
 def _retry_pending_flags():
     """Emails whose Outlook flag failed on a previous run (usually
@@ -116,6 +135,26 @@ def run():
         if email["id"] in processed:
             continue
         try:
+            if is_external_sender(email) and boss_is_recipient(email):
+                try:
+                    billing = classify_billing(email)
+                except Exception as e:
+                    print(f"Billing check failed for {email['subject']}: {e}")
+                    billing = None
+
+                if billing is not None and billing.is_billing_related:
+                    folder = save_billing_email(email, BILLING_OUTPUT_ROOT)
+                    mark_processed(email["id"], OUTPUT_ROOT)
+                    if administracion_is_recipient(email):
+                        print(f"Saved (billing, admin already on it): {email['subject']} -> {folder}")
+                    else:
+                        ok = forward_email(email["id"], ADMINISTRACION_EMAIL)
+                        if ok:
+                            print(f"Saved (billing) and forwarded to {ADMINISTRACION_EMAIL}: {email['subject']} -> {folder}")
+                        else:
+                            print(f"Saved (billing) but forwarding FAILED: {email['subject']} -> {folder}")
+                    continue
+
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
@@ -164,6 +203,7 @@ def run():
             print(f"Saved: {email['subject']} -> {folder}")
 
             _handle_pending_check(email)
+            _handle_priority_check(email)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue

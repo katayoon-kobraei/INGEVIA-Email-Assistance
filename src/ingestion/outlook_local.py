@@ -26,6 +26,8 @@ def _fetch_from_folder(outlook, folder_id, minutes_back, direction):
             "subject": message.Subject,
             "sender": message.SenderEmailAddress if direction == "ENTRANTE" else None,
             "recipient": message.To if direction == "SALIENTE" else None,
+            "to": message.To,
+            "cc": message.CC,
             "timestamp": timestamp,
             "body": message.Body,
             "attachments": message.Attachments,

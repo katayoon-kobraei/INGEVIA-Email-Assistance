@@ -48,3 +48,7 @@ class ProjectMatchResult(BaseModel):
 class AddressMatchResult(BaseModel):
     matched_existing: bool
     address_folder_name: str   # bare name, no code prefix -- e.g. "CAMÍ DE FAITANAR 2 - PICAÑA"
+
+
+class BillingMatchResult(BaseModel):
+    is_billing_related: bool  # true = factura, proforma, oferta, presupuesto, licitación, or contratación del Estado
