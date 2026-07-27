@@ -1,6 +1,5 @@
 from enum import Enum
 from pydantic import BaseModel
-from pydantic import BaseModel, Field
 
 
 class Priority(str, Enum):
@@ -30,7 +29,7 @@ class DepartmentResult(BaseModel):
 
 
 class RelevanceResult(BaseModel):
-    is_relevant: bool  # false = social media / marketing / automated noise -- not real client correspondence
+    is_relevant: bool  # unused now -- kept for the orphaned relevance_agent.py
 
 
 class PendingResult(BaseModel):
@@ -38,6 +37,7 @@ class PendingResult(BaseModel):
 
 
 class ProjectMatchResult(BaseModel):
+    is_relevant: bool  # true = real project correspondence or official bank/government mail worth filing; false = everything else -- left untouched, staff handle it manually
     matched_existing: bool
     project_folder_name: str
     contact_label: str   # e.g. "E.BOSCH" or "DAVID REYERO (REYQUEDA)"
@@ -48,6 +48,3 @@ class ProjectMatchResult(BaseModel):
 class AddressMatchResult(BaseModel):
     matched_existing: bool
     address_folder_name: str   # bare name, no code prefix -- e.g. "CAMÍ DE FAITANAR 2 - PICAÑA"
-
-class PriorityScoreResult(BaseModel):
-    priority: int = Field(ge=1, le=5)  # 1 = low urgency, 5 = most urgent
