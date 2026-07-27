@@ -10,9 +10,9 @@ from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
 from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.outlook_flag import mark_email_processed
-from src.output.outlook_archive import archive_email
+from src.output.outlook_archive import archive_email, copy_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
-from src.output.archive_state import load_pending_archive, add_pending_archive, remove_pending_archive
+from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
 from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient
 from src.classification.billing_agent import classify_billing
@@ -67,20 +67,19 @@ def _retry_pending_flags():
             print(f"  Flagged on retry: {entry_id}")
 
 
-def _retry_pending_archives():
-    """Retries pending-response emails whose move to PENDING_FOLDER_NAME
+def _retry_pending_copies():
+    """Retries pending-response emails whose copy to PENDING_FOLDER_NAME
     failed last run."""
     if not CHECK_PENDING_RESPONSES:
         return
-    pending = load_pending_archive(OUTPUT_ROOT)
+    pending = load_pending_copies(OUTPUT_ROOT)
     if not pending:
         return
-    print(f"Retrying {len(pending)} email(s) whose folder move failed last run...")
+    print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
     for entry_id, folder_name in list(pending.items()):
-        if archive_email(entry_id, folder_name):
-            remove_pending_archive(OUTPUT_ROOT, entry_id)
-            print(f"  Moved on retry: {entry_id} -> {folder_name}")
-
+        if copy_email(entry_id, folder_name):
+            remove_pending_copy(OUTPUT_ROOT, entry_id)
+            print(f"  Copied on retry: {entry_id} -> {folder_name}")
 
 def _mark_done(email):
     """Marks an email as processed locally (dedupe state) and, if
@@ -114,19 +113,17 @@ def _handle_pending_check(email):
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
-    ok = archive_email(email["id"], PENDING_FOLDER_NAME)
+    ok = copy_email(email["id"], PENDING_FOLDER_NAME)
     if ok:
-        remove_pending_archive(OUTPUT_ROOT, email["id"])
+        remove_pending_copy(OUTPUT_ROOT, email["id"])
     else:
-        add_pending_archive(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
-        print(f"  (Move to pending folder failed -- will retry automatically next run)")
-    print(f"  Marked as PENDING RESPONSE: {email['subject']}")
-
+        add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
+        print(f"  (Copy to pending folder failed -- will retry automatically next run)")
 
 def run():
     ensure_output_root()
     _retry_pending_flags()
-    _retry_pending_archives()
+    _retry_pending_copies()
     processed = load_processed_ids(OUTPUT_ROOT)
     emails = get_recent_emails(20)
     print(f"Found {len(emails)} email(s), {len(processed)} already processed.")

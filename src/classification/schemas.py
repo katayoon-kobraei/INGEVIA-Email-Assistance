@@ -1,5 +1,5 @@
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Priority(str, Enum):
@@ -52,3 +52,7 @@ class AddressMatchResult(BaseModel):
 
 class BillingMatchResult(BaseModel):
     is_billing_related: bool  # true = factura, proforma, oferta, presupuesto, licitación, or contratación del Estado
+
+
+class PriorityScoreResult(BaseModel):
+    priority: int = Field(ge=1, le=5)  # 1 = low urgency, 5 = urgent
