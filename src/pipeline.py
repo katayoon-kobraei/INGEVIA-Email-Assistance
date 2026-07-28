@@ -14,7 +14,7 @@ from src.output.outlook_archive import archive_email, copy_email
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
-from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient
+from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient, is_internal_sender
 from src.classification.billing_agent import classify_billing
 from src.output.save_email import save_email, save_billing_email
 from src.output.outlook_forward import forward_email
@@ -27,6 +27,7 @@ from src.output.project_folders import (
     get_next_address_code,
     get_project_year,
     is_formal_project_code,
+    company_uses_address_subfolders ,
 )
 from src.classification.pending_agent import classify_pending
 from src.classification.project_agent import classify_project
@@ -132,6 +133,11 @@ def run():
         if email["id"] in processed:
             continue
         try:
+            if is_internal_sender(email):
+                mark_processed(email["id"], OUTPUT_ROOT)
+                print(f"Ignored (internal domain): {email['subject']}")
+                continue
+
             if is_external_sender(email) and boss_is_recipient(email):
                 try:
                     billing = classify_billing(email)
@@ -175,8 +181,13 @@ def run():
                 contact_label = match.contact_label
                 topic_label = match.topic_label
 
-                if match.mentions_specific_address:
-                    company_year = get_project_year(project_folder_name) or email_year
+                company_year = get_project_year(project_folder_name) or email_year
+                uses_addresses = company_uses_address_subfolders(OUTPUT_ROOT, company_year, project_folder_name)
+                should_classify_address = (
+                    uses_addresses if uses_addresses is not None else match.mentions_specific_address
+                )
+
+                if should_classify_address:
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
                     try:
                         addr_match = classify_address(email, existing_addresses, project_folder_name)

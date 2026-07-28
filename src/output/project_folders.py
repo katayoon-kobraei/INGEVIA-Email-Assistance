@@ -4,6 +4,35 @@ import re
 RESERVED_TOP_LEVEL_NAMES = {"UNSORTED"}
 
 
+def company_uses_address_subfolders(output_root, company_year, company_folder_name):
+    """Deterministically decides whether THIS company already uses
+    address-level subfoldering, by looking at its real folder
+    structure -- never left to the model's judgment about what a
+    given email's text happens to mention.
+
+    Returns:
+      True  -- company already has one or more address-coded
+               subfolders (e.g. '26-003-01 ...'). classify_address
+               MUST run, regardless of this email's own content.
+      False -- company already has "03.-CORREO" directly under it
+               (single-site). classify_address must NOT run for it.
+      None  -- company folder doesn't exist yet, or exists but has
+               neither "03.-CORREO" nor any address subfolder yet
+               (brand new). Ambiguous -- caller should fall back to
+               the email's own content (mentions_specific_address)
+               to decide how to set this company up for the first time.
+    """
+    company_path = get_company_path(output_root, company_year, company_folder_name)
+    if not os.path.isdir(company_path):
+        return None
+
+    if os.path.isdir(os.path.join(company_path, "03.-CORREO")):
+        return False
+    if list_existing_addresses(output_root, company_year, company_folder_name):
+        return True
+    return None
+
+
 def get_holding_pen_name(year):
     """The per-year holding folder for emails that don't match any
     existing project and aren't a started/formal project yet."""

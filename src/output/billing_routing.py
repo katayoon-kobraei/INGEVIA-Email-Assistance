@@ -19,5 +19,16 @@ def boss_is_recipient(email):
     return BOSS_EMAIL.strip().lower() in _recipients_text(email)
 
 
+def is_internal_sender(email):
+    """True if the sender's own domain is the firm's internal domain.
+    Used to ignore ALL internal mail outright -- no exceptions, not
+    even administracion@ingevia.com sending as herself. (This is
+    separate from administracion_is_recipient(), which only ever
+    checks her as a To/Cc recipient for the billing-forward path.)"""
+    sender = (email.get("sender") or "").strip().lower()
+    if "@" not in sender:
+        return False
+    return sender.rsplit("@", 1)[-1] == INTERNAL_DOMAIN.strip().lower()
+
 def administracion_is_recipient(email):
     return ADMINISTRACION_EMAIL.strip().lower() in _recipients_text(email)
