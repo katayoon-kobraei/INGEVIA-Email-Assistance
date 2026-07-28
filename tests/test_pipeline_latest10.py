@@ -17,13 +17,15 @@ from src.config import (
 )
 from src.output.save_email import save_email, save_billing_email
 from src.output.dedupe import load_processed_ids, mark_processed
+from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient, is_internal_sender, is_ignored_sender
 from src.output.outlook_flag import mark_email_processed
 from src.output.outlook_archive import copy_email
+from src.classification.plenergy_agent import classify_plenergy_address
+from src.output.plenergy_routing import is_plenergy_sender, extract_us_code, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
 from src.output.priority_list import append_to_priority_list
-from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient, is_internal_sender
 from src.output.outlook_forward import forward_email
 from src.output.project_folders import (
     list_existing_projects,
@@ -32,6 +34,7 @@ from src.output.project_folders import (
     get_project_year,
     is_formal_project_code,
     company_uses_address_subfolders,
+    find_existing_holding_pen_entry,
 )
 from src.classification.billing_agent import classify_billing
 from src.classification.pending_agent import classify_pending
@@ -169,6 +172,10 @@ def run():
                 mark_processed(email["id"], OUTPUT_ROOT)
                 print(f"Ignored (internal domain): {email['subject']}")
                 continue
+            if is_ignored_sender(email):
+                mark_processed(email["id"], OUTPUT_ROOT)
+                print(f"Ignored (blocked sender): {email['subject']}")
+                continue
             
             if is_external_sender(email) and boss_is_recipient(email):
                 try:
@@ -189,6 +196,46 @@ def run():
                         else:
                             print(f"Saved (billing) but forwarding FAILED: {email['subject']} -> {folder}")
                     continue
+
+            if is_plenergy_sender(email):
+                email_year = email["timestamp"].year
+                us_code = extract_us_code(email)
+                contact_label = "PLAINCO" if "plainco.es" in (email.get("sender") or "").lower() else "PLENERGY"
+
+                # Fast path: explicit US code, cheap string match, no token cost.
+                match_result = resolve_plenergy_folder(OUTPUT_ROOT, email_year, us_code) if us_code else None
+
+                # Fallback: no US code mentioned, or the code found doesn't
+                # literally match any folder name -- let the model judge by
+                # full context (address, town, nickname) instead.
+                if not match_result:
+                    do_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, DO_PLENERGY_FOLDER)
+                    project_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, PLENERGY_FOLDER)
+                    try:
+                        llm_match = classify_plenergy_address(email, do_candidates, project_candidates)
+                    except Exception as e:
+                        print(f"Plenergy address classification failed for {email['subject']}: {e}")
+                        llm_match = None
+
+                    if llm_match is not None and llm_match.matched_existing:
+                        match_result = (llm_match.matched_folder, llm_match.address_folder_name)
+
+                if match_result:
+                    project_folder_name, address_folder_name = match_result
+                    topic_label = us_code or "ESTACION IDENTIFICADA"
+                else:
+                    pen_entry = find_existing_holding_pen_entry(OUTPUT_ROOT, email_year, "PLENERGY-PLAINCO")
+                    project_folder_name = pen_entry or "PLENERGY-PLAINCO"
+                    address_folder_name = None
+                    topic_label = "SIN CODIGO US" if not us_code else f"{us_code} NO IDENTIFICADO"
+
+                folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
+                append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                _mark_done(email)
+                print(f"Saved (Plenergy): {email['subject']} -> {folder}")
+                _handle_pending_check(email)
+                _handle_priority_check(email)
+                continue
 
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])

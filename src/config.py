@@ -94,6 +94,9 @@ BILLING_OUTPUT_ROOT = os.environ.get("BILLING_OUTPUT_ROOT") or r"X:\EMAILS"
 
 IGNORE_DOMAINS = os.environ.get("IGNORE_DOMAINS") or "ingevia.com"
 
+IGNORE_SENDERS = os.environ.get("IGNORE_SENDERS") or "fmunoz@munozbosch.com"
+
+PLENERGY_SENDER_DOMAINS = os.environ.get("PLENERGY_SENDER_DOMAINS") or "plenergy.es,plainco.es"
 
 def ensure_output_root():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)

@@ -33,6 +33,21 @@ def company_uses_address_subfolders(output_root, company_year, company_folder_na
     return None
 
 
+def find_existing_holding_pen_entry(output_root, year, bare_name):
+    """Checks this year's holding pen for an entry matching bare_name
+    (ignoring any '{NNN} ' counter prefix it may already have) -- so
+    repeat unmatched emails for the same special case land in the SAME
+    holding-pen folder instead of minting a new one every time."""
+    pen_path = os.path.join(output_root, f"TRABAJOS {year}", get_holding_pen_name(year))
+    if not os.path.isdir(pen_path):
+        return None
+    target = bare_name.strip().upper()
+    for name in os.listdir(pen_path):
+        stripped = re.sub(r"^\d{3}\s+", "", name).strip().upper()
+        if stripped == target:
+            return name
+    return None
+
 def get_holding_pen_name(year):
     """The per-year holding folder for emails that don't match any
     existing project and aren't a started/formal project yet."""

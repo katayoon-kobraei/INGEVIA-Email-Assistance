@@ -56,3 +56,8 @@ class BillingMatchResult(BaseModel):
 
 class PriorityScoreResult(BaseModel):
     priority: int = Field(ge=1, le=5)  # 1 = low urgency, 5 = urgent
+
+class PlenergyAddressMatchResult(BaseModel):
+    matched_existing: bool
+    matched_folder: str  # "26-004 DO PLENERGY" or "26-003 PLENERGY" -- only meaningful when matched_existing=True
+    address_folder_name: str  # exact existing folder name if matched; a NEW bare name proposal otherwise
