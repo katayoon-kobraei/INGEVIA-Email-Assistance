@@ -1,7 +1,4 @@
-from src.config import INTERNAL_DOMAIN, ADMINISTRACION_EMAIL, BOSS_EMAIL
-
-
-from src.config import INTERNAL_DOMAIN, ADMINISTRACION_EMAIL, BOSS_EMAIL, BANK_DOMAINS, IGNORE_SENDERS
+from src.config import INTERNAL_DOMAIN, ADMINISTRACION_EMAIL, BOSS_EMAIL, IGNORE_SENDERS
 
 def is_ignored_sender(email):
     """True if the sender's exact address is on the explicit ignore

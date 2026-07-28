@@ -14,8 +14,10 @@ def classify_plenergy_address(email, do_candidates, project_candidates):
     """Fallback for when the deterministic US-code string match finds
     nothing -- lets the model judge by full context (address, town,
     nickname, project details) whether this email is about an
-    existing station in either folder, rather than relying purely on
-    an exact US-code text match."""
+    existing station in either folder. If no match, also returns a
+    proposed new site name and the contact's name in the same call --
+    both are needed for the fallback folder name, so there is no
+    second Gemini call in the no-match case."""
     do_list = "\n".join(do_candidates) if do_candidates else "(ninguna todavía)"
     project_list = "\n".join(project_candidates) if project_candidates else "(ninguna todavía)"
     contact = email.get("sender") or email.get("recipient")

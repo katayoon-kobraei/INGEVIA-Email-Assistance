@@ -39,3 +39,13 @@ exact text match.
 
 Do not force a match if the email genuinely doesn't reference any existing station -- a wrong
 match is worse than correctly proposing a new one.
+
+## Contact name (only if no match found)
+
+If matched_existing = false (no existing station matched), also identify the human being
+actually corresponding here -- from the email's signature, greeting, or sender display name if
+given in the text. Return their name in ALL CAPS as contact_name (e.g. "MARÍA CORTES"). If no
+name can be identified, return an empty string.
+
+If matched_existing = true, return an empty string for contact_name -- it is not used in that
+case.

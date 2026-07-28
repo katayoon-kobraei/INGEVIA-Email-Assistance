@@ -16,7 +16,7 @@ from src.output.pending_copy_state import load_pending_copies, add_pending_copy,
 from src.output.pending_list import append_to_pending_list
 from src.classification.billing_agent import classify_billing
 from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient, is_internal_sender, is_ignored_sender
-from src.output.save_email import save_email, save_billing_email
+from src.output.save_email import save_email, save_billing_email, save_plenergy_fallback_email
 from src.output.outlook_forward import forward_email
 from src.config import BOSS_EMAIL, ADMINISTRACION_EMAIL, BILLING_OUTPUT_ROOT
 from src.classification.priority_agent import classify_priority
@@ -30,7 +30,7 @@ from src.output.project_folders import (
     get_project_year,
     is_formal_project_code,
     company_uses_address_subfolders,
-    find_existing_holding_pen_entry,
+    get_holding_pen_name,
 )
 from src.classification.pending_agent import classify_pending
 from src.classification.project_agent import classify_project
@@ -176,7 +176,10 @@ def run():
 
                 # Fallback: no US code mentioned, or the code found doesn't
                 # literally match any folder name -- let the model judge by
-                # full context (address, town, nickname) instead.
+                # full context (address, town, nickname) instead. If it
+                # also finds no match, this same call already returned a
+                # proposed site name + contact name, used below.
+                llm_match = None
                 if not match_result:
                     do_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, DO_PLENERGY_FOLDER)
                     project_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, PLENERGY_FOLDER)
@@ -192,14 +195,23 @@ def run():
                 if match_result:
                     project_folder_name, address_folder_name = match_result
                     topic_label = us_code or "ESTACION IDENTIFICADA"
+                    folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
+                    append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
                 else:
-                    pen_entry = find_existing_holding_pen_entry(OUTPUT_ROOT, email_year, "PLENERGY-PLAINCO")
-                    project_folder_name = pen_entry or "PLENERGY-PLAINCO"
-                    address_folder_name = None
-                    topic_label = "SIN CODIGO US" if not us_code else f"{us_code} NO IDENTIFICADO"
+                    site_hint = llm_match.address_folder_name.strip() if llm_match and llm_match.address_folder_name else ""
+                    contact_name = llm_match.contact_name.strip() if llm_match and llm_match.contact_name else ""
+                    date_str = email["timestamp"].strftime("%y-%m-%d")
 
-                folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
-                append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                    parts = [date_str, contact_label]
+                    if site_hint:
+                        parts.append(site_hint)
+                    if contact_name:
+                        parts.append(contact_name)
+                    folder_label = " ".join(parts)
+
+                    folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label)
+                    append_to_index(email, get_holding_pen_name(email_year), contact_label, folder_label, folder, OUTPUT_ROOT, None)
+
                 _mark_done(email)
                 print(f"Saved (Plenergy): {email['subject']} -> {folder}")
                 _handle_pending_check(email)
