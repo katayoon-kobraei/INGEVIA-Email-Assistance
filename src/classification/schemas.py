@@ -34,6 +34,16 @@ class RelevanceResult(BaseModel):
 
 class PendingResult(BaseModel):
     needs_response: bool  # true = this email is waiting on a written reply from the firm
+    # kept for compatibility -- no longer called from pipeline.py, superseded by PostFilingResult
+
+
+class PostFilingResult(BaseModel):
+    """Merges the old separate pending-check and priority-score calls
+    into one -- both are cheap, informational-only checks that need
+    nothing but the email itself, so there's no reason to pay for the
+    email body twice."""
+    needs_response: bool
+    priority: int = Field(ge=1, le=5)
 
 
 class ProjectMatchResult(BaseModel):

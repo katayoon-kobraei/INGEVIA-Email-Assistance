@@ -19,7 +19,6 @@ from src.output.billing_routing import is_external_sender, boss_is_recipient, ad
 from src.output.save_email import save_email, save_billing_email, save_plenergy_fallback_email
 from src.output.outlook_forward import forward_email
 from src.config import BOSS_EMAIL, ADMINISTRACION_EMAIL, BILLING_OUTPUT_ROOT
-from src.classification.priority_agent import classify_priority
 from src.classification.plenergy_agent import classify_plenergy_address
 from src.output.plenergy_routing import is_plenergy_sender, extract_us_code, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
 from src.output.priority_list import append_to_priority_list
@@ -32,7 +31,7 @@ from src.output.project_folders import (
     company_uses_address_subfolders,
     get_holding_pen_name,
 )
-from src.classification.pending_agent import classify_pending
+from src.classification.post_filing_agent import classify_post_filing
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
@@ -42,18 +41,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-
-def _handle_priority_check(email):
-    """Cheap urgency score (1-5) for anything that got filed. Purely
-    informational -- doesn't affect filing or Outlook state, just logs
-    to priorities.csv for the desktop UI to read."""
-    try:
-        result = classify_priority(email)
-    except Exception as e:
-        print(f"Priority check failed for {email['subject']}: {e}")
-        return
-    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
-    print(f"  Priority: {result.priority}/5")
 
 def _retry_pending_flags():
     """Emails whose Outlook flag failed on a previous run (usually
@@ -101,19 +88,25 @@ def _mark_done(email):
         print(f"  (Outlook flag failed -- will retry automatically next run)")
 
 
-def _handle_pending_check(email):
-    """After a relevant email is filed, run a cheap separate check for
-    whether it's still waiting on a written reply. Only meaningful for
-    incoming mail. If it needs a reply: log it to pendientes.csv and
-    move it (in Outlook) into PENDING_FOLDER_NAME."""
+def _handle_post_filing_checks(email):
+    """Runs the merged pending-response + priority check exactly once
+    per filed email, in a single Gemini call (replaces the old separate
+    _handle_pending_check + _handle_priority_check, which each re-sent
+    the full email body independently). Priority is logged for every
+    filed email; the pending-response copy/log only applies to incoming
+    mail, same as before."""
+    try:
+        result = classify_post_filing(email)
+    except Exception as e:
+        print(f"Post-filing check failed for {email['subject']}: {e}")
+        return
+
+    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
+    print(f"  Priority: {result.priority}/5")
+
     if not CHECK_PENDING_RESPONSES or email.get("direction") != "ENTRANTE":
         return
-    try:
-        pending = classify_pending(email)
-    except Exception as e:
-        print(f"Pending-response check failed for {email['subject']}: {e}")
-        return
-    if not pending.needs_response:
+    if not result.needs_response:
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
@@ -214,8 +207,7 @@ def run():
 
                 _mark_done(email)
                 print(f"Saved (Plenergy): {email['subject']} -> {folder}")
-                _handle_pending_check(email)
-                _handle_priority_check(email)
+                _handle_post_filing_checks(email)
                 continue
 
             email_year = email["timestamp"].year
@@ -271,8 +263,7 @@ def run():
             _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
 
-            _handle_pending_check(email)
-            _handle_priority_check(email)
+            _handle_post_filing_checks(email)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue

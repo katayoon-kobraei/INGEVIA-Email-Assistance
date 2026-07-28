@@ -37,8 +37,7 @@ from src.output.project_folders import (
     get_holding_pen_name,
 )
 from src.classification.billing_agent import classify_billing
-from src.classification.pending_agent import classify_pending
-from src.classification.priority_agent import classify_priority
+from src.classification.post_filing_agent import classify_post_filing
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
@@ -117,15 +116,21 @@ def _mark_done(email):
         print("  (Outlook flag: FAILED -- queued to retry next run)")
 
 
-def _handle_pending_check(email):
+def _handle_post_filing_checks(email):
+    """Runs the merged pending-response + priority check exactly once
+    per filed email, in a single Gemini call."""
+    try:
+        result = classify_post_filing(email)
+    except Exception as e:
+        print(f"Post-filing check failed for {email['subject']}: {e}")
+        return
+
+    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
+    print(f"  Priority: {result.priority}/5")
+
     if not CHECK_PENDING_RESPONSES or email.get("direction") != "ENTRANTE":
         return
-    try:
-        pending = classify_pending(email)
-    except Exception as e:
-        print(f"Pending-response check failed for {email['subject']}: {e}")
-        return
-    if not pending.needs_response:
+    if not result.needs_response:
         print("  (Not pending -- no reply needed)")
         return
 
@@ -137,20 +142,7 @@ def _handle_pending_check(email):
     else:
         add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
         print("  (Copy to pending folder FAILED -- queued to retry next run)")
-
-
-def _handle_priority_check(email):
-    """Cheap urgency score (1-5) for anything that got filed. Purely
-    informational -- doesn't affect filing or Outlook state, just logs
-    to priorities.csv for the UI to read."""
-    try:
-        result = classify_priority(email)
-    except Exception as e:
-        print(f"Priority check failed for {email['subject']}: {e}")
-        return
-    append_to_priority_list(email, result.priority, OUTPUT_ROOT)
-    print(f"  Priority: {result.priority}/5")
-
+        
 
 def run():
     ensure_output_root()
@@ -245,8 +237,7 @@ def run():
 
                 _mark_done(email)
                 print(f"Saved (Plenergy): {email['subject']} -> {folder}")
-                _handle_pending_check(email)
-                _handle_priority_check(email)
+                _handle_post_filing_checks(email)
                 continue
 
             
@@ -297,8 +288,7 @@ def run():
             _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
 
-            _handle_pending_check(email)
-            _handle_priority_check(email)
+            _handle_post_filing_checks(email)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue
