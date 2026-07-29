@@ -53,6 +53,7 @@ class ProjectMatchResult(BaseModel):
     contact_label: str   # e.g. "E.BOSCH" or "DAVID REYERO (REYQUEDA)"
     topic_label: str
     mentions_specific_address: bool  # true if THIS email names a specific site/address/location
+    summary: str  # one-line, plain-Spanish (not ALL-CAPS) summary for the human-readable tracking report -- only meaningful when is_relevant=True
 
 
 class AddressMatchResult(BaseModel):
@@ -73,3 +74,4 @@ class PlenergyAddressMatchResult(BaseModel):
     matched_folder: str      # "26-004 DO PLENERGY" or "26-003 PLENERGY" -- only meaningful when matched_existing=True
     address_folder_name: str # exact existing name if matched; otherwise a NEW bare site name proposal
     contact_name: str        # ALL CAPS contact name from signature/greeting -- only meaningful when matched_existing=False; "" otherwise
+    summary: str             # one-line, plain-Spanish summary for the human-readable tracking report

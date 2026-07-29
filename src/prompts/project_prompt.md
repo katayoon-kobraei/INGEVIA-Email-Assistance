@@ -115,3 +115,12 @@ A short topic_label (1-4 words, Spanish, ALL CAPS) describing what this specific
   CAD
 
 Prefer short, document-type-like labels over full sentences.
+
+## Summary (for the tracking report)
+
+Separately from the topic_label above, write a one-sentence summary of what this specific email
+says or asks for, in plain Spanish -- normal sentence case, NOT the ALL-CAPS style used elsewhere
+in this task. This is read by office staff in a spreadsheet report, not used as a folder name, so
+it should read like a normal short sentence, e.g. "Solicita presupuesto para reforma de fachada"
+or "Envía el plano CAD actualizado de la parcela". Only fill this in when is_relevant = true;
+otherwise return an empty string.

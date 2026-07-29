@@ -49,3 +49,10 @@ name can be identified, return an empty string.
 
 If matched_existing = true, return an empty string for contact_name -- it is not used in that
 case.
+
+## Summary (for the tracking report)
+
+Regardless of whether a match was found, also write a one-sentence summary of what this email is
+about, in plain Spanish, normal sentence case (not ALL-CAPS) -- e.g. "Consulta sobre el estado de
+la licencia de obra" or "Envía factura de material para la estación". Read by office staff in a
+spreadsheet report, not used as a folder name.

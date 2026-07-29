@@ -20,6 +20,7 @@ from src.output.dedupe import load_processed_ids, mark_processed
 from src.output.billing_routing import is_external_sender, boss_is_recipient, administracion_is_recipient, is_internal_sender, is_ignored_sender
 from src.output.outlook_flag import mark_email_processed
 from src.output.outlook_archive import copy_email
+from src.output.report_writer import append_to_report_log, generate_email_report_xlsx, cheap_fallback_summary
 from src.classification.plenergy_agent import classify_plenergy_address
 from src.output.plenergy_routing import is_plenergy_sender, extract_us_code, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
@@ -215,6 +216,8 @@ def run():
                     if llm_match is not None and llm_match.matched_existing:
                         match_result = (llm_match.matched_folder, llm_match.address_folder_name)
 
+                row_summary = llm_match.summary if llm_match is not None else cheap_fallback_summary(email)
+
                 if match_result:
                     project_folder_name, address_folder_name = match_result
                     topic_label = us_code or "ESTACION IDENTIFICADA"
@@ -235,6 +238,7 @@ def run():
                     folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label)
                     append_to_index(email, get_holding_pen_name(email_year), contact_label, folder_label, folder, OUTPUT_ROOT, None)
 
+                append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
                 _mark_done(email)
                 print(f"Saved (Plenergy): {email['subject']} -> {folder}")
                 _handle_post_filing_checks(email)
@@ -244,6 +248,7 @@ def run():
             email_year = email["timestamp"].year
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
+            summary = ""
             try:
                 # classify_project decides relevance itself now -- if
                 # it's not worth filing, leave it completely untouched
@@ -258,6 +263,7 @@ def run():
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
+                summary = match.summary
 
                 company_year = get_project_year(project_folder_name) or email_year
                 uses_addresses = company_uses_address_subfolders(OUTPUT_ROOT, company_year, project_folder_name)
@@ -282,9 +288,11 @@ def run():
             except Exception as e:
                 print(f"Project classification failed for {email['subject']}: {e}")
                 project_folder_name, contact_label, topic_label = "UNSORTED", "DESCONOCIDO", "SIN CLASIFICAR"
+                summary = cheap_fallback_summary(email)
 
             folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+            append_to_report_log(email, contact_label, summary, folder, OUTPUT_ROOT)
             _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
 
@@ -294,6 +302,7 @@ def run():
             continue
 
     generate_status_page(OUTPUT_ROOT)
+    generate_email_report_xlsx(OUTPUT_ROOT)
     print("Done.")
 
 

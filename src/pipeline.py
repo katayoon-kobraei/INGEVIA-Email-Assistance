@@ -35,6 +35,7 @@ from src.classification.post_filing_agent import classify_post_filing
 from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
+from src.output.report_writer import append_to_report_log, generate_email_report_xlsx, cheap_fallback_summary
 from src.output.status_page import generate_status_page
 
 import sys
@@ -133,7 +134,7 @@ def run():
                 mark_processed(email["id"], OUTPUT_ROOT)
                 print(f"Ignored (internal domain): {email['subject']}")
                 continue
-            
+
             if is_ignored_sender(email):
                 mark_processed(email["id"], OUTPUT_ROOT)
                 print(f"Ignored (blocked sender): {email['subject']}")
@@ -185,6 +186,11 @@ def run():
                     if llm_match is not None and llm_match.matched_existing:
                         match_result = (llm_match.matched_folder, llm_match.address_folder_name)
 
+                # llm_match is None whenever the deterministic US-code fast
+                # path resolved it (no Gemini call happened at all) -- fall
+                # back to a free, non-LLM summary in that one case only.
+                row_summary = llm_match.summary if llm_match is not None else cheap_fallback_summary(email)
+
                 if match_result:
                     project_folder_name, address_folder_name = match_result
                     topic_label = us_code or "ESTACION IDENTIFICADA"
@@ -205,6 +211,7 @@ def run():
                     folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label)
                     append_to_index(email, get_holding_pen_name(email_year), contact_label, folder_label, folder, OUTPUT_ROOT, None)
 
+                append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
                 _mark_done(email)
                 print(f"Saved (Plenergy): {email['subject']} -> {folder}")
                 _handle_post_filing_checks(email)
@@ -214,6 +221,7 @@ def run():
 
             existing = list_existing_projects(OUTPUT_ROOT, [email_year])
             address_folder_name = None
+            summary = ""
             try:
                 # classify_project now decides relevance itself -- no
                 # separate pre-filter call, no separate token cost for
@@ -233,6 +241,7 @@ def run():
                 project_folder_name = match.project_folder_name
                 contact_label = match.contact_label
                 topic_label = match.topic_label
+                summary = match.summary
 
                 company_year = get_project_year(project_folder_name) or email_year
                 uses_addresses = company_uses_address_subfolders(OUTPUT_ROOT, company_year, project_folder_name)
@@ -257,9 +266,11 @@ def run():
             except Exception as e:
                 print(f"Project classification failed for {email['subject']}: {e}")
                 project_folder_name, contact_label, topic_label = "UNSORTED", "DESCONOCIDO", "SIN CLASIFICAR"
+                summary = cheap_fallback_summary(email)
 
             folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+            append_to_report_log(email, contact_label, summary, folder, OUTPUT_ROOT)
             _mark_done(email)
             print(f"Saved: {email['subject']} -> {folder}")
 
@@ -269,6 +280,7 @@ def run():
             continue
 
     generate_status_page(OUTPUT_ROOT)
+    generate_email_report_xlsx(OUTPUT_ROOT)
 
 
 if __name__ == "__main__":
