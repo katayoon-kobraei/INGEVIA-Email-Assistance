@@ -309,6 +309,48 @@ def load_attachment_rows() -> list[dict[str, Any]]:
     return rows
 
 
+
+def get_report_excel_info() -> dict[str, Any]:
+    """Return status information for the generated Excel email report."""
+    path = REPORT_XLSX_PATH
+    info: dict[str, Any] = {
+        "path": str(path),
+        "name": path.name,
+        "exists": False,
+        "size_bytes": 0,
+        "size_text": "—",
+        "modified": "—",
+        "entries": len(load_report_rows()),
+    }
+
+    try:
+        if not path.is_file():
+            return info
+
+        stat = path.stat()
+        size_bytes = int(stat.st_size)
+        if size_bytes < 1024:
+            size_text = f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            size_text = f"{size_bytes / 1024:.1f} KB"
+        else:
+            size_text = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+        info.update(
+            {
+                "exists": True,
+                "size_bytes": size_bytes,
+                "size_text": size_text,
+                "modified": datetime.fromtimestamp(stat.st_mtime).strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
+            }
+        )
+    except OSError:
+        pass
+
+    return info
+
 def get_scheduler_status() -> dict[str, Any] | None:
     if os.name != "nt":
         return None

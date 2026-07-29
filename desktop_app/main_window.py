@@ -982,6 +982,121 @@ class ReportPage(QWidget):
             QMessageBox.warning(self, "No se pudo abrir", message)
 
 
+class ExcelReportPage(QWidget):
+    """Página dedicada al informe Excel generado en la carpeta de salida."""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(14)
+
+        heading = QLabel("Informe Excel")
+        heading.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Acceso directo al archivo «Informe de Emails.xlsx» generado en la carpeta de salida."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        outer.addWidget(heading)
+        outer.addWidget(subtitle)
+
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(22, 20, 22, 20)
+        panel_layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        icon = QLabel("XLSX")
+        icon.setObjectName("MetricIcon")
+        icon.setProperty("tone", "green")
+        icon.setFixedSize(58, 42)
+        icon.setAlignment(Qt.AlignCenter)
+
+        title_block = QVBoxLayout()
+        self.file_name = QLabel(data_service.REPORT_XLSX_PATH.name)
+        self.file_name.setObjectName("SectionTitle")
+        self.status_label = QLabel("Consultando el archivo...")
+        self.status_label.setObjectName("WarningPill")
+        self.status_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        title_block.addWidget(self.file_name)
+        title_block.addWidget(self.status_label, 0, Qt.AlignLeft)
+
+        header.addWidget(icon)
+        header.addLayout(title_block, 1)
+        panel_layout.addLayout(header)
+
+        self.path_value = add_setting_row(
+            panel_layout,
+            "Ubicación",
+            str(data_service.REPORT_XLSX_PATH),
+        )
+        self.size_value = add_setting_row(panel_layout, "Tamaño", "—")
+        self.modified_value = add_setting_row(panel_layout, "Última actualización", "—")
+        self.entries_value = add_setting_row(panel_layout, "Correos incluidos", "0")
+        outer.addWidget(panel)
+
+        actions = QHBoxLayout()
+        self.open_button = QPushButton("Abrir informe Excel")
+        self.open_button.setObjectName("PrimaryButton")
+        self.open_button.clicked.connect(self._open_excel)
+
+        open_folder = QPushButton("Abrir carpeta de salida")
+        open_folder.setObjectName("SecondaryButton")
+        open_folder.clicked.connect(self._open_output)
+
+        refresh = QPushButton("↻  Actualizar estado")
+        refresh.setObjectName("SecondaryButton")
+        refresh.clicked.connect(self.refresh_status)
+
+        actions.addWidget(self.open_button)
+        actions.addWidget(open_folder)
+        actions.addWidget(refresh)
+        actions.addStretch()
+        outer.addLayout(actions)
+
+        note = QLabel(
+            "El informe se vuelve a generar después del procesamiento. Si todavía no existe, "
+            "procese al menos un correo relevante y actualice esta página."
+        )
+        note.setObjectName("MutedText")
+        note.setWordWrap(True)
+        outer.addWidget(note)
+        outer.addStretch()
+
+        self.refresh_status()
+
+    def refresh_status(self) -> None:
+        info = data_service.get_report_excel_info()
+        self.path_value.setText(str(info.get("path", "")))
+        self.size_value.setText(str(info.get("size_text", "—")))
+        self.modified_value.setText(str(info.get("modified", "—")))
+        self.entries_value.setText(str(info.get("entries", 0)))
+
+        exists = bool(info.get("exists"))
+        self.open_button.setEnabled(exists)
+        if exists:
+            self.status_label.setText("Disponible")
+            self.status_label.setObjectName("SuccessPill")
+        else:
+            self.status_label.setText("Todavía no generado")
+            self.status_label.setObjectName("WarningPill")
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+    def _open_excel(self) -> None:
+        ok, message = data_service.open_path(data_service.REPORT_XLSX_PATH)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _open_output(self) -> None:
+        ok, message = data_service.open_path(data_service.OUTPUT_ROOT)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+
 class AttachmentsPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -1210,6 +1325,7 @@ class MainWindow(QMainWindow):
         self.flagged = FlaggedPage()
         self.pending_page = PendingPage()
         self.report_page = ReportPage()
+        self.excel_page = ExcelReportPage()
         self.attachments = AttachmentsPage()
         self.settings_page = SettingsPage()
         for page in (
@@ -1218,6 +1334,7 @@ class MainWindow(QMainWindow):
             self.flagged,
             self.pending_page,
             self.report_page,
+            self.excel_page,
             self.attachments,
             self.settings_page,
         ):
@@ -1257,8 +1374,9 @@ class MainWindow(QMainWindow):
             ("⚑  Marcados en Outlook", 2),
             ("↩  Pendientes de respuesta", 3),
             ("▤  Informe de correos", 4),
-            ("▣  Adjuntos", 5),
-            ("⚙  Configuración", 6),
+            ("▥  Informe Excel", 5),
+            ("▣  Adjuntos", 6),
+            ("⚙  Configuración", 7),
         ]
         for text, index in buttons:
             button = QPushButton(text)
@@ -1274,7 +1392,7 @@ class MainWindow(QMainWindow):
         status.setObjectName("SidebarStatus")
         status.setToolTip("La interfaz se ejecuta únicamente en este ordenador.")
         layout.addWidget(status)
-        version = QLabel("Desktop UI 1.3")
+        version = QLabel("Desktop UI 1.4")
         version.setObjectName("SidebarStatus")
         layout.addWidget(version)
         return sidebar
@@ -1337,6 +1455,7 @@ class MainWindow(QMainWindow):
             ("Marcados en Outlook", "Correos identificados como procesados por el asistente"),
             ("Pendientes de respuesta", "Mensajes que necesitan una respuesta escrita de la empresa"),
             ("Informe de correos", "Resumen generado de los correos archivados"),
+            ("Informe Excel", "Archivo Excel generado en la carpeta de salida"),
             ("Adjuntos", "Archivos guardados y bloqueados por seguridad"),
             ("Configuración", "Estado de la aplicación local y sus rutas"),
         ]
@@ -1363,6 +1482,7 @@ class MainWindow(QMainWindow):
             self.emails.set_rows(rows)
             self.pending_page.set_rows(pending_rows)
             self.report_page.set_rows(report_rows)
+            self.excel_page.refresh_status()
             self.attachments.set_rows(attachments)
             self.settings_page.refresh_status()
             self.statusBar().showMessage("Datos locales actualizados", 4000)
