@@ -265,11 +265,13 @@ def run():
                 topic_label = match.topic_label
                 summary = match.summary
 
-                company_year = get_project_year(project_folder_name) or email_year
-                uses_addresses = company_uses_address_subfolders(OUTPUT_ROOT, company_year, project_folder_name)
-                should_classify_address = (
-                    uses_addresses if uses_addresses is not None else match.mentions_specific_address
-                )
+                should_classify_address = False
+                if is_formal_project_code(project_folder_name):
+                    company_year = get_project_year(project_folder_name) or email_year
+                    uses_addresses = company_uses_address_subfolders(OUTPUT_ROOT, company_year, project_folder_name)
+                    should_classify_address = (
+                        uses_addresses if uses_addresses is not None else match.mentions_specific_address
+                    )
 
                 if should_classify_address:
                     existing_addresses = list_existing_addresses(OUTPUT_ROOT, company_year, project_folder_name)
@@ -277,11 +279,9 @@ def run():
                         addr_match = classify_address(email, existing_addresses, project_folder_name)
                         if addr_match.matched_existing:
                             address_folder_name = addr_match.address_folder_name
-                        elif is_formal_project_code(project_folder_name):
+                        else:
                             addr_code = get_next_address_code(OUTPUT_ROOT, company_year, project_folder_name)
                             address_folder_name = f"{addr_code} {addr_match.address_folder_name}"
-                        else:
-                            address_folder_name = addr_match.address_folder_name
                     except Exception as e:
                         print(f"Address classification failed for {email['subject']}: {e}")
                         address_folder_name = None

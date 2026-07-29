@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -61,12 +62,38 @@ def is_formal_project_code(project_folder_name):
     return re.match(r"^\d{2}-\d+", project_folder_name) is not None
 
 
+def _distinct_holding_pen_projects(pen_path):
+    """Each entry in a year's holding pen is now a flat, one-per-email
+    folder (see build_holding_pen_folder_name) -- its own display name
+    bakes in the date/time/sender/subject, so it's no longer a clean
+    matchable project name on its own. The real project name is read
+    back out of each entry's metadata.json instead (written by
+    save_email/save_plenergy_fallback_email). Plenergy fallback entries
+    have no "project_folder" key at all and are correctly skipped."""
+    names = set()
+    if not os.path.isdir(pen_path):
+        return names
+    for entry in os.listdir(pen_path):
+        meta_path = os.path.join(pen_path, entry, "metadata.json")
+        if not os.path.isfile(meta_path):
+            continue
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        project = data.get("project_folder")
+        if project:
+            names.add(project)
+    return names
+
+
 def list_existing_projects(output_root, years):
     """Flat list of matchable candidate names for the given year(s):
-    real top-level project folders, plus every not-yet-started entry
-    sitting inside that year's holding pen (e.g. 26-000 MAILS).
-    UNSORTED is excluded -- it's not a real matchable project, just
-    where failed classifications get dumped."""
+    real top-level project folders, plus every distinct not-yet-formal
+    project name already seen in that year's holding pen (e.g.
+    26-000 MAILS). UNSORTED is excluded -- it's not a real matchable
+    project, just where failed classifications get dumped."""
     projects = []
     for year in years:
         trabajos_folder = os.path.join(output_root, f"TRABAJOS {year}")
@@ -78,11 +105,10 @@ def list_existing_projects(output_root, years):
                 continue
             if name == pen_name:
                 pen_path = os.path.join(trabajos_folder, name)
-                if os.path.isdir(pen_path):
-                    projects.extend(os.listdir(pen_path))
+                projects.extend(_distinct_holding_pen_projects(pen_path))
             else:
                 projects.append(name)
-    return sorted(projects)
+    return sorted(set(projects))
 
 
 def get_next_project_code(output_root, year):
