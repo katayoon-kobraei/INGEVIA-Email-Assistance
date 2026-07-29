@@ -307,6 +307,25 @@ QHeaderView::section {
 QTableWidget::item { padding: 7px; }
 QTableWidget::item:hover { background: #f0f7ff; }
 
+/* Selected email summary */
+QFrame#EmailSummaryPanel {
+    background: #f7fbff;
+    border: 1px solid #cfe0f2;
+    border-left: 5px solid #2f80ed;
+    border-radius: 11px;
+}
+QLabel#EmailSummaryTitle {
+    color: #1f5f9e;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+QLabel#EmailSummaryText {
+    color: #1f2f43;
+    font-size: 13px;
+    font-weight: 600;
+}
+
 /* Drawer */
 QFrame#Drawer {
     background: white;

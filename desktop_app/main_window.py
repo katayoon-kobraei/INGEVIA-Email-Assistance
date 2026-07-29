@@ -592,7 +592,9 @@ class EmailsPage(QWidget):
 
         heading = QLabel("Correos archivados")
         heading.setObjectName("PageTitle")
-        subtitle = QLabel("Busca, filtra y abre la carpeta asociada a cada correo procesado.")
+        subtitle = QLabel(
+            "Busca, filtra y consulta el resumen de cada correo procesado."
+        )
         subtitle.setObjectName("PageSubtitle")
         priority_legend = QLabel(
             "Prioridad: 5 crítica (rojo) · 4 alta (naranja) · 3 normal (amarillo)"
@@ -604,34 +606,70 @@ class EmailsPage(QWidget):
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar por asunto, contacto o proyecto...")
+        self.search.setPlaceholderText(
+            "Buscar por asunto, resumen, contacto o proyecto..."
+        )
         self.project_filter = QComboBox()
         self.project_filter.addItem("Todos los proyectos")
         self.direction_filter = QComboBox()
-        self.direction_filter.addItems(["Todas las direcciones", "Entrante", "Saliente"])
+        self.direction_filter.addItems(
+            ["Todas las direcciones", "Entrante", "Saliente"]
+        )
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["Todos los estados", "Procesado", "Revisar"])
+        self.status_filter.addItems(
+            ["Todos los estados", "Procesado", "Revisar"]
+        )
         filters.addWidget(self.search, 2)
         filters.addWidget(self.project_filter, 1)
         filters.addWidget(self.direction_filter, 1)
         filters.addWidget(self.status_filter, 1)
         outer.addLayout(filters)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
-        self.table = QTableWidget(0, 8)
+        # Resumen de una línea generado por el mismo flujo que alimenta
+        # el archivo Excel "Informe de Emails.xlsx".
+        summary_panel = QFrame()
+        summary_panel.setObjectName("EmailSummaryPanel")
+        summary_layout = QVBoxLayout(summary_panel)
+        summary_layout.setContentsMargins(16, 12, 16, 12)
+        summary_layout.setSpacing(4)
+
+        summary_title = QLabel("Resumen del correo seleccionado")
+        summary_title.setObjectName("EmailSummaryTitle")
+        self.email_summary = QLabel(
+            "Seleccione un correo para ver su resumen de una línea."
+        )
+        self.email_summary.setObjectName("EmailSummaryText")
+        self.email_summary.setWordWrap(True)
+        self.email_summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        summary_layout.addWidget(summary_title)
+        summary_layout.addWidget(self.email_summary)
+        outer.addWidget(summary_panel)
+
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
             [
-                "Fecha", "Dirección", "Proyecto", "Contacto", "Asunto",
-                "Adjuntos", "Prioridad", "Estado",
+                "Fecha",
+                "Dirección",
+                "Proyecto",
+                "Contacto",
+                "Asunto",
+                "Resumen",
+                "Adjuntos",
+                "Prioridad",
+                "Estado",
             ]
         )
         configure_table(self.table)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.drawer = DetailDrawer()
-        body.addWidget(self.table, 1)
-        body.addWidget(self.drawer)
-        outer.addLayout(body, 1)
+        self.table.setWordWrap(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.Stretch
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.Stretch
+        )
+        # La tabla ahora utiliza todo el ancho disponible. El panel lateral de
+        # detalles se ha eliminado; la selección solo actualiza el resumen superior.
+        outer.addWidget(self.table, 1)
 
         self.search.textChanged.connect(self.apply_filters)
         self.project_filter.currentTextChanged.connect(self.apply_filters)
@@ -643,7 +681,13 @@ class EmailsPage(QWidget):
     def set_rows(self, rows: list[dict[str, Any]]) -> None:
         self.all_rows = rows
         current = self.project_filter.currentText()
-        projects = sorted({str(row.get("Project Folder", "")) for row in rows if row.get("Project Folder")})
+        projects = sorted(
+            {
+                str(row.get("Project Folder", ""))
+                for row in rows
+                if row.get("Project Folder")
+            }
+        )
         self.project_filter.blockSignals(True)
         self.project_filter.clear()
         self.project_filter.addItem("Todos los proyectos")
@@ -664,19 +708,36 @@ class EmailsPage(QWidget):
             haystack = " ".join(
                 str(record.get(key, ""))
                 for key in (
-                    "Subject", "Contact", "Project Folder", "Topic",
-                    "Sender/Recipient", "Priority", "Summary",
+                    "Subject",
+                    "Summary",
+                    "Contact",
+                    "Project Folder",
+                    "Topic",
+                    "Sender/Recipient",
+                    "Priority",
                 )
             ).lower()
             if query and query not in haystack:
                 continue
-            if project != "Todos los proyectos" and record.get("Project Folder") != project:
+            if (
+                project != "Todos los proyectos"
+                and record.get("Project Folder") != project
+            ):
                 continue
-            if direction == "Entrante" and record.get("Direction") != "ENTRANTE":
+            if (
+                direction == "Entrante"
+                and record.get("Direction") != "ENTRANTE"
+            ):
                 continue
-            if direction == "Saliente" and record.get("Direction") != "SALIENTE":
+            if (
+                direction == "Saliente"
+                and record.get("Direction") != "SALIENTE"
+            ):
                 continue
-            if status == "Procesado" and record.get("_status") != "PROCESADO":
+            if (
+                status == "Procesado"
+                and record.get("_status") != "PROCESADO"
+            ):
                 continue
             if status == "Revisar" and record.get("_status") != "REVISAR":
                 continue
@@ -686,24 +747,49 @@ class EmailsPage(QWidget):
         for record in filtered:
             row = self.table.rowCount()
             self.table.insertRow(row)
+            summary = str(record.get("Summary") or "").strip()
             values = [
                 record.get("Date", ""),
                 direction_label(record.get("Direction", "")),
                 record.get("Project Folder", ""),
                 record.get("Contact", ""),
                 record.get("Subject", ""),
+                summary or "Sin resumen disponible",
                 record.get("Attachments", "0"),
                 priority_label(record.get("_priority")),
-                "Revisar" if record.get("_status") == "REVISAR" else "Procesado",
+                (
+                    "Revisar"
+                    if record.get("_status") == "REVISAR"
+                    else "Procesado"
+                ),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if column == 0:
                     item.setData(Qt.UserRole, record)
-                apply_priority_style(item, record.get("_priority"), emphasize=column == 6)
-                if column == 7:
-                    item.setForeground(QColor("#b26a00" if record.get("_status") == "REVISAR" else "#087443"))
+                if column == 5:
+                    item.setToolTip(summary or "Sin resumen disponible")
+                apply_priority_style(
+                    item,
+                    record.get("_priority"),
+                    emphasize=column == 7,
+                )
+                if column == 8:
+                    item.setForeground(
+                        QColor(
+                            "#b26a00"
+                            if record.get("_status") == "REVISAR"
+                            else "#087443"
+                        )
+                    )
                 self.table.setItem(row, column, item)
+
+        if filtered:
+            self.table.selectRow(0)
+        else:
+            self.email_summary.setText(
+                "No hay correos que coincidan con los filtros seleccionados."
+            )
 
     def _selected_record(self) -> dict[str, Any] | None:
         row = self.table.currentRow()
@@ -714,8 +800,17 @@ class EmailsPage(QWidget):
 
     def _selection_changed(self) -> None:
         record = self._selected_record()
-        if record:
-            self.drawer.show_record(record)
+        if not record:
+            self.email_summary.setText(
+                "Seleccione un correo para ver su resumen de una línea."
+            )
+            return
+
+        summary = str(record.get("Summary") or "").strip()
+        self.email_summary.setText(
+            summary
+            or "No hay un resumen disponible para este correo."
+        )
 
     def _open_selected(self, _row: int, _column: int) -> None:
         record = self._selected_record()
@@ -1392,7 +1487,7 @@ class MainWindow(QMainWindow):
         status.setObjectName("SidebarStatus")
         status.setToolTip("La interfaz se ejecuta únicamente en este ordenador.")
         layout.addWidget(status)
-        version = QLabel("Desktop UI 1.4")
+        version = QLabel("Desktop UI 1.5")
         version.setObjectName("SidebarStatus")
         layout.addWidget(version)
         return sidebar
