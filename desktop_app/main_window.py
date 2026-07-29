@@ -6,7 +6,15 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QThread, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QParallelAnimationGroup,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QThread,
+    Signal,
+)
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -72,44 +80,159 @@ class OutlookFlagWorker(QThread):
 
 
 class MetricCard(QFrame):
-    def __init__(self, icon: str, title: str, hint: str = "", tone: str = "blue") -> None:
+    """Tarjeta de métrica con panel informativo deslizante al pasar el cursor."""
+
+    def __init__(
+        self,
+        icon: str,
+        title: str,
+        hint: str = "",
+        tone: str = "blue",
+        details: str = "",
+    ) -> None:
         super().__init__()
+
         self.setObjectName("MetricCard")
         self.setProperty("tone", tone)
-        self.setMinimumHeight(138)
+        self.setFixedHeight(148)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setCursor(Qt.PointingHandCursor)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(7)
+        # The frame itself has no layout. Both pages are direct children and
+        # are moved horizontally by QPropertyAnimation.
+        self._showing_details = False
 
-        top = QHBoxLayout()
+        self.front_page = QWidget(self)
+        self.front_page.setObjectName("MetricSlidePage")
+
+        front_layout = QVBoxLayout(self.front_page)
+        front_layout.setContentsMargins(18, 16, 18, 16)
+        front_layout.setSpacing(7)
+
+        top_layout = QHBoxLayout()
         self.icon = QLabel(icon)
         self.icon.setObjectName("MetricIcon")
         self.icon.setProperty("tone", tone)
         self.icon.setFixedSize(38, 38)
         self.icon.setAlignment(Qt.AlignCenter)
-        top.addWidget(self.icon)
-        top.addStretch()
-        layout.addLayout(top)
+        top_layout.addWidget(self.icon)
+        top_layout.addStretch()
+        front_layout.addLayout(top_layout)
 
         self.value = QLabel("—")
         self.value.setObjectName("MetricValue")
         self.value.setProperty("tone", tone)
+
         self.title = QLabel(title)
         self.title.setObjectName("MetricTitle")
+
         self.hint = QLabel(hint)
         self.hint.setObjectName("MetricHint")
         self.hint.setWordWrap(True)
 
-        layout.addWidget(self.value)
-        layout.addWidget(self.title)
-        layout.addWidget(self.hint)
+        front_layout.addWidget(self.value)
+        front_layout.addWidget(self.title)
+        front_layout.addWidget(self.hint)
+
+        self.details_page = QWidget(self)
+        self.details_page.setObjectName("MetricSlidePage")
+
+        details_layout = QVBoxLayout(self.details_page)
+        details_layout.setContentsMargins(18, 15, 18, 13)
+        details_layout.setSpacing(6)
+
+        details_header = QHBoxLayout()
+        details_icon = QLabel(icon)
+        details_icon.setObjectName("MetricIcon")
+        details_icon.setProperty("tone", tone)
+        details_icon.setFixedSize(34, 34)
+        details_icon.setAlignment(Qt.AlignCenter)
+
+        self.details_title = QLabel(title)
+        self.details_title.setObjectName("MetricDetailTitle")
+        self.details_title.setWordWrap(True)
+
+        details_header.addWidget(details_icon)
+        details_header.addWidget(self.details_title, 1)
+        details_layout.addLayout(details_header)
+
+        self.details_text = QLabel(details or hint)
+        self.details_text.setObjectName("MetricDetailText")
+        self.details_text.setWordWrap(True)
+        details_layout.addWidget(self.details_text)
+
+        self.details_status = QLabel(hint)
+        self.details_status.setObjectName("MetricDetailStatus")
+        self.details_status.setWordWrap(True)
+        details_layout.addWidget(self.details_status)
+        details_layout.addStretch()
+
+        footer = QLabel("Retire el cursor para volver al contador")
+        footer.setObjectName("MetricDetailFooter")
+        details_layout.addWidget(footer)
+
+        self.front_animation = QPropertyAnimation(self.front_page, b"pos", self)
+        self.details_animation = QPropertyAnimation(self.details_page, b"pos", self)
+
+        for animation in (self.front_animation, self.details_animation):
+            animation.setDuration(260)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        self.animation_group = QParallelAnimationGroup(self)
+        self.animation_group.addAnimation(self.front_animation)
+        self.animation_group.addAnimation(self.details_animation)
+
+    def resizeEvent(self, event) -> None:
+        """Mantiene ambas páginas alineadas al redimensionar la ventana."""
+        super().resizeEvent(event)
+
+        width = self.width()
+        height = self.height()
+        self.front_page.resize(width, height)
+        self.details_page.resize(width, height)
+
+        if self._showing_details:
+            self.front_page.move(-width, 0)
+            self.details_page.move(0, 0)
+        else:
+            self.front_page.move(0, 0)
+            self.details_page.move(width, 0)
+
+    def _slide(self, show_details: bool) -> None:
+        """Anima el cambio entre el contador y el panel informativo."""
+        if self._showing_details == show_details:
+            return
+
+        self._showing_details = show_details
+        width = max(self.width(), 1)
+
+        self.animation_group.stop()
+        self.front_animation.setStartValue(self.front_page.pos())
+        self.details_animation.setStartValue(self.details_page.pos())
+
+        if show_details:
+            self.front_animation.setEndValue(QPoint(-width, 0))
+            self.details_animation.setEndValue(QPoint(0, 0))
+        else:
+            self.front_animation.setEndValue(QPoint(0, 0))
+            self.details_animation.setEndValue(QPoint(width, 0))
+
+        self.animation_group.start()
+
+    def enterEvent(self, event) -> None:
+        self._slide(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._slide(False)
+        super().leaveEvent(event)
 
     def set_value(self, value: int | str, hint: str | None = None) -> None:
+        """Actualiza el contador y, cuando procede, el estado del panel."""
         self.value.setText(str(value))
         if hint is not None:
             self.hint.setText(hint)
+            self.details_status.setText(f"Estado actual: {hint}")
 
 
 class DetailDrawer(QFrame):
@@ -145,11 +268,14 @@ class DetailDrawer(QFrame):
             ("Date", "FECHA"),
             ("Direction", "DIRECCIÓN"),
             ("Project Folder", "PROYECTO"),
+            ("Address Folder", "UBICACIÓN / DIRECCIÓN"),
             ("Contact", "CONTACTO"),
             ("Topic", "TEMA"),
             ("Subject", "ASUNTO"),
             ("Attachments", "ADJUNTOS"),
             ("Priority", "PRIORIDAD"),
+            ("_pending", "PENDIENTE DE RESPUESTA"),
+            ("Summary", "RESUMEN"),
             ("_status", "ESTADO"),
         ):
             label = QLabel(caption)
@@ -175,10 +301,12 @@ class DetailDrawer(QFrame):
     def show_record(self, record: dict[str, Any]) -> None:
         self._record = record
         for key, label in self.values.items():
-            value = record.get(key, "") or "—"
+            value = record.get(key, "")
             if key == "Priority":
                 value = priority_label(value)
-            label.setText(str(value))
+            elif key == "_pending":
+                value = "Sí" if value else "No"
+            label.setText(str(value or "—"))
         self.animation.stop()
         self.animation.setStartValue(self.maximumWidth())
         self.animation.setEndValue(370)
@@ -247,21 +375,60 @@ class DashboardPage(QWidget):
         cards = QHBoxLayout()
         cards.setSpacing(14)
         self.processed_card = MetricCard(
-            "✓", "Correos procesados", "Total de correos registrados por el sistema", "green"
+            "✓",
+            "Correos procesados",
+            "Total de correos registrados por el sistema",
+            "green",
+            details=(
+                "Muestra el número de correos únicos que ya han sido gestionados "
+                "por el asistente. No se procesarán de nuevo en futuras ejecuciones."
+            ),
         )
         self.flagged_card = MetricCard(
-            "⚑", "Marcados en Outlook", "Categoría y marca completada por el asistente", "orange"
+            "⚑",
+            "Marcados en Outlook",
+            "Correos identificados por el asistente en Outlook",
+            "orange",
+            details=(
+                "Muestra los correos que contienen la categoría configurada por el "
+                "asistente. Puede consultarlos desde Marcados en Outlook."
+            ),
         )
         self.filed_card = MetricCard(
-            "▤", "Correos archivados", "Correos guardados en carpetas de proyecto", "blue"
+            "▤",
+            "Correos archivados",
+            "Correos guardados correctamente en carpetas",
+            "blue",
+            details=(
+                "Muestra los correos clasificados y guardados en la carpeta del "
+                "proyecto correspondiente, junto con sus archivos adjuntos."
+            ),
         )
         self.review_card = MetricCard(
-            "!", "Necesitan revisión", "Clasificación pendiente o UNSORTED", "red"
+            "!",
+            "Pendientes de revisión",
+            "Correos sin una clasificación segura",
+            "red",
+            details=(
+                "Muestra los correos que el sistema no pudo clasificar con suficiente "
+                "seguridad. Estos mensajes deben revisarse manualmente."
+            ),
+        )
+        self.pending_card = MetricCard(
+            "↩",
+            "Pendientes de respuesta",
+            "Correos que requieren una respuesta de la empresa",
+            "purple",
+            details=(
+                "Muestra los correos entrantes relevantes que el agente de IA ha "
+                "identificado como pendientes de una respuesta escrita."
+            ),
         )
         cards.addWidget(self.processed_card)
         cards.addWidget(self.flagged_card)
         cards.addWidget(self.filed_card)
         cards.addWidget(self.review_card)
+        cards.addWidget(self.pending_card)
         outer.addLayout(cards)
 
         content = QHBoxLayout()
@@ -296,6 +463,12 @@ class DashboardPage(QWidget):
         self.quarantine_summary = QLabel("")
         self.quarantine_summary.setWordWrap(True)
         self.quarantine_summary.setObjectName("MutedText")
+        self.priority_summary = QLabel("")
+        self.priority_summary.setWordWrap(True)
+        self.priority_summary.setObjectName("MutedText")
+        self.pending_summary = QLabel("")
+        self.pending_summary.setWordWrap(True)
+        self.pending_summary.setObjectName("MutedText")
         self.outlook_summary = QLabel("Consultando Outlook...")
         self.outlook_summary.setWordWrap(True)
         self.outlook_summary.setObjectName("MutedText")
@@ -303,6 +476,8 @@ class DashboardPage(QWidget):
         attention_layout.addSpacing(8)
         attention_layout.addWidget(self.review_summary)
         attention_layout.addWidget(self.quarantine_summary)
+        attention_layout.addWidget(self.priority_summary)
+        attention_layout.addWidget(self.pending_summary)
         attention_layout.addWidget(self.outlook_summary)
         attention_layout.addStretch()
         content.addWidget(attention_panel, 1)
@@ -319,12 +494,23 @@ class DashboardPage(QWidget):
         self.process_button.setText("Procesando..." if active else "▶  Procesar nuevos correos")
         self.progress.setVisible(active)
 
-    def update_local_data(self, rows: list[dict[str, Any]], attachments: list[dict[str, Any]], processed: int) -> None:
+    def update_local_data(
+        self,
+        rows: list[dict[str, Any]],
+        attachments: list[dict[str, Any]],
+        processed: int,
+        activity_rows: list[dict[str, Any]] | None = None,
+        pending_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
         review = [row for row in rows if row.get("Project Folder") == "UNSORTED"]
         quarantined = [row for row in attachments if row.get("Estado") == "quarantined"]
         self.processed_card.set_value(processed)
         self.filed_card.set_value(len(rows))
         self.review_card.set_value(len(review))
+        pending_total = len(pending_rows or [])
+        high_priority = [row for row in rows if int(row.get("_priority") or 0) >= 4]
+        critical_priority = [row for row in rows if int(row.get("_priority") or 0) == 5]
+        self.pending_card.set_value(pending_total)
         self.review_summary.setText(
             "✓ No hay correos pendientes de clasificación."
             if not review
@@ -335,34 +521,51 @@ class DashboardPage(QWidget):
             if not quarantined
             else f"⚠ {len(quarantined)} adjunto(s) fueron bloqueados por seguridad."
         )
+        self.priority_summary.setText(
+            "✓ No hay correos de prioridad alta o crítica."
+            if not high_priority
+            else f"⚠ {len(high_priority)} correo(s) tienen prioridad 4 o 5; {len(critical_priority)} son críticos."
+        )
+        self.pending_summary.setText(
+            "✓ No hay correos pendientes de respuesta."
+            if pending_total == 0
+            else f"↩ {pending_total} correo(s) necesitan una respuesta de la empresa."
+        )
 
+        source_rows = activity_rows or rows
+        status_labels = {
+            "ARCHIVADO": "Archivado",
+            "OMITIDO": "Omitido",
+            "REVISAR": "Revisar",
+            "ERROR": "Error",
+            "PENDIENTE": "Pendiente de respuesta",
+            "PROCESADO": "Procesado",
+        }
         self.recent_table.setRowCount(0)
-        for record in rows[:12]:
+        for record in source_rows[:12]:
             row = self.recent_table.rowCount()
             self.recent_table.insertRow(row)
+            raw_status = str(record.get("Status") or record.get("_status") or "PROCESADO")
+            status_text = status_labels.get(raw_status, raw_status.title())
             values = [
                 record.get("Date", ""),
                 direction_label(record.get("Direction", "")),
-                record.get("Project Folder", ""),
+                record.get("Project Folder", "") or "—",
                 record.get("Subject", ""),
                 priority_label(record.get("_priority")),
-                "Revisar" if record.get("_status") == "REVISAR" else "Procesado",
+                status_text,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                apply_priority_style(
-                    item,
-                    record.get("_priority"),
-                    emphasize=column == 4,
-                )
+                apply_priority_style(item, record.get("_priority"), emphasize=column == 4)
                 if column == 5:
-                    item.setForeground(
-                        QColor(
-                            "#b26a00"
-                            if record.get("_status") == "REVISAR"
-                            else "#087443"
-                        )
-                    )
+                    color = {
+                        "ERROR": "#b42318",
+                        "REVISAR": "#b26a00",
+                        "OMITIDO": "#52667a",
+                        "PENDIENTE": "#6d28d9",
+                    }.get(raw_status, "#087443")
+                    item.setForeground(QColor(color))
                 self.recent_table.setItem(row, column, item)
 
     def update_flagged(self, summary: data_service.OutlookFlagSummary) -> None:
@@ -419,14 +622,8 @@ class EmailsPage(QWidget):
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
             [
-                "Fecha",
-                "Dirección",
-                "Proyecto",
-                "Contacto",
-                "Asunto",
-                "Adjuntos",
-                "Prioridad",
-                "Estado",
+                "Fecha", "Dirección", "Proyecto", "Contacto", "Asunto",
+                "Adjuntos", "Prioridad", "Estado",
             ]
         )
         configure_table(self.table)
@@ -467,12 +664,8 @@ class EmailsPage(QWidget):
             haystack = " ".join(
                 str(record.get(key, ""))
                 for key in (
-                    "Subject",
-                    "Contact",
-                    "Project Folder",
-                    "Topic",
-                    "Sender/Recipient",
-                    "Priority",
+                    "Subject", "Contact", "Project Folder", "Topic",
+                    "Sender/Recipient", "Priority", "Summary",
                 )
             ).lower()
             if query and query not in haystack:
@@ -507,19 +700,9 @@ class EmailsPage(QWidget):
                 item = QTableWidgetItem(str(value))
                 if column == 0:
                     item.setData(Qt.UserRole, record)
-                apply_priority_style(
-                    item,
-                    record.get("_priority"),
-                    emphasize=column == 6,
-                )
+                apply_priority_style(item, record.get("_priority"), emphasize=column == 6)
                 if column == 7:
-                    item.setForeground(
-                        QColor(
-                            "#b26a00"
-                            if record.get("_status") == "REVISAR"
-                            else "#087443"
-                        )
-                    )
+                    item.setForeground(QColor("#b26a00" if record.get("_status") == "REVISAR" else "#087443"))
                 self.table.setItem(row, column, item)
 
     def _selected_record(self) -> dict[str, Any] | None:
@@ -555,7 +738,7 @@ class FlaggedPage(QWidget):
         title = QLabel("Correos marcados en Outlook")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            f"Correos con la categoría «{data_service.PROCESSED_CATEGORY_NAME}» y marca completada."
+            f"Correos con la categoría «{data_service.PROCESSED_CATEGORY_NAME}» y marca de seguimiento."
         )
         subtitle.setObjectName("PageSubtitle")
         text.addWidget(title)
@@ -600,6 +783,203 @@ class FlaggedPage(QWidget):
             self.table.insertRow(row)
             for column, key in enumerate(("Fecha", "Dirección", "Contacto", "Asunto", "Categoría")):
                 self.table.setItem(row, column, QTableWidgetItem(str(record.get(key, ""))))
+
+
+class PendingPage(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self._rows: list[dict[str, Any]] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(14)
+
+        heading = QLabel("Pendientes de respuesta")
+        heading.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Correos entrantes que el sistema ha identificado como pendientes de una respuesta escrita."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        outer.addWidget(heading)
+        outer.addWidget(subtitle)
+
+        controls = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Buscar por remitente o asunto...")
+        self.search.textChanged.connect(self._render)
+        open_list = QPushButton("Abrir lista CSV")
+        open_list.setObjectName("SecondaryButton")
+        open_list.clicked.connect(self._open_list)
+        open_output = QPushButton("Abrir carpeta de salida")
+        open_output.setObjectName("PrimaryButton")
+        open_output.clicked.connect(self._open_output)
+        controls.addWidget(self.search, 1)
+        controls.addWidget(open_list)
+        controls.addWidget(open_output)
+        outer.addLayout(controls)
+
+        self.summary = QLabel("0 correos pendientes")
+        self.summary.setObjectName("MutedText")
+        outer.addWidget(self.summary)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Fecha", "Remitente", "Asunto", "Prioridad"])
+        configure_table(self.table)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        outer.addWidget(self.table, 1)
+
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+        self._render()
+
+    def _render(self) -> None:
+        query = self.search.text().strip().lower()
+        filtered = []
+        for record in self._rows:
+            text = " ".join(
+                str(record.get(key, ""))
+                for key in ("Fecha", "Remitente", "Asunto")
+            ).lower()
+            if query and query not in text:
+                continue
+            filtered.append(record)
+
+        self.table.setRowCount(0)
+        for record in filtered:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            values = [
+                record.get("Fecha", ""),
+                record.get("Remitente", ""),
+                record.get("Asunto", ""),
+                priority_label(record.get("_priority")),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                apply_priority_style(item, record.get("_priority"), emphasize=column == 3)
+                self.table.setItem(row, column, item)
+        self.summary.setText(f"{len(filtered)} correo(s) pendiente(s) de respuesta")
+
+    def _open_list(self) -> None:
+        ok, message = data_service.open_path(data_service.PENDING_LIST_PATH)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _open_output(self) -> None:
+        ok, message = data_service.open_path(data_service.OUTPUT_ROOT)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+
+class ReportPage(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self._rows: list[dict[str, Any]] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(14)
+
+        heading = QLabel("Informe de correos")
+        heading.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Resumen legible de los correos archivados, generado por el backend después de cada ejecución."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        outer.addWidget(heading)
+        outer.addWidget(subtitle)
+
+        controls = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Buscar por remitente, asunto o resumen...")
+        self.search.textChanged.connect(self._render)
+        open_excel = QPushButton("Abrir informe Excel")
+        open_excel.setObjectName("PrimaryButton")
+        open_excel.clicked.connect(self._open_excel)
+        open_csv = QPushButton("Abrir registro CSV")
+        open_csv.setObjectName("SecondaryButton")
+        open_csv.clicked.connect(self._open_csv)
+        controls.addWidget(self.search, 1)
+        controls.addWidget(open_csv)
+        controls.addWidget(open_excel)
+        outer.addLayout(controls)
+
+        self.summary = QLabel("0 entradas en el informe")
+        self.summary.setObjectName("MutedText")
+        outer.addWidget(self.summary)
+
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Fecha", "Remitente", "Email", "Asunto", "Prioridad", "Resumen"]
+        )
+        configure_table(self.table)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table.cellDoubleClicked.connect(self._open_selected)
+        outer.addWidget(self.table, 1)
+
+    def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+        self._render()
+
+    def _render(self) -> None:
+        query = self.search.text().strip().lower()
+        filtered = []
+        for record in self._rows:
+            text = " ".join(
+                str(record.get(key, ""))
+                for key in ("NombreRemitente", "EmailRemitente", "Asunto", "Resumen")
+            ).lower()
+            if query and query not in text:
+                continue
+            filtered.append(record)
+
+        self.table.setRowCount(0)
+        for record in filtered:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            values = [
+                record.get("FechaHora", ""),
+                record.get("NombreRemitente", ""),
+                record.get("EmailRemitente", ""),
+                record.get("Asunto", ""),
+                priority_label(record.get("_priority")),
+                record.get("Resumen", ""),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.UserRole, record)
+                apply_priority_style(item, record.get("_priority"), emphasize=column == 4)
+                self.table.setItem(row, column, item)
+        self.summary.setText(f"{len(filtered)} entrada(s) en el informe")
+
+    def _selected(self) -> dict[str, Any] | None:
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def _open_selected(self, _row: int, _column: int) -> None:
+        record = self._selected()
+        if not record:
+            return
+        ok, message = data_service.open_path(record.get("Ruta", ""))
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _open_excel(self) -> None:
+        ok, message = data_service.open_path(data_service.REPORT_XLSX_PATH)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _open_csv(self) -> None:
+        ok, message = data_service.open_path(data_service.REPORT_LOG_PATH)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
 
 
 class AttachmentsPage(QWidget):
@@ -742,6 +1122,24 @@ class SettingsPage(QWidget):
         self.gemini_value = add_setting_row(layout, "Clave de Gemini", gemini_status)
         flag_status = "Activado" if data_service.FLAG_PROCESSED_EMAILS else "Desactivado"
         self.flag_value = add_setting_row(layout, "Marcado automático en Outlook", flag_status)
+        pending_status = "Activado" if data_service.CHECK_PENDING_RESPONSES else "Desactivado"
+        self.pending_value = add_setting_row(layout, "Detección de respuestas pendientes", pending_status)
+        self.pending_folder_value = add_setting_row(layout, "Carpeta de pendientes en Outlook", data_service.PENDING_FOLDER_NAME)
+        self.junk_value = add_setting_row(
+            layout,
+            "Correos no relevantes",
+            "Se dejan sin cambios en la bandeja de entrada (comportamiento actual)",
+        )
+        self.billing_value = add_setting_row(layout, "Carpeta de facturación", str(data_service.BILLING_OUTPUT_ROOT))
+        self.admin_value = add_setting_row(layout, "Correo de administración", data_service.ADMINISTRACION_EMAIL)
+        self.boss_value = add_setting_row(layout, "Correo del responsable", data_service.BOSS_EMAIL)
+        description_path = str(data_service.DESCRIPTIONS_XLSX_PATH) if data_service.DESCRIPTIONS_XLSX_PATH else "No configurado"
+        self.description_value = add_setting_row(layout, "Archivo de descripciones", description_path)
+        self.description_limit_value = add_setting_row(layout, "Límite por descripción", f"{data_service.DESCRIPTION_MAX_CHARS} caracteres")
+        self.ignore_domains_value = add_setting_row(layout, "Dominios internos ignorados", data_service.IGNORE_DOMAINS)
+        self.ignore_senders_value = add_setting_row(layout, "Remitentes ignorados", data_service.IGNORE_SENDERS)
+        self.plenergy_value = add_setting_row(layout, "Dominios Plenergy / Plainco", data_service.PLENERGY_SENDER_DOMAINS)
+        self.report_value = add_setting_row(layout, "Informe generado", str(data_service.REPORT_XLSX_PATH))
         self.scheduler_value = add_setting_row(layout, "Tarea programada", "Consultando...")
         outer.addWidget(panel)
 
@@ -810,9 +1208,19 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardPage()
         self.emails = EmailsPage()
         self.flagged = FlaggedPage()
+        self.pending_page = PendingPage()
+        self.report_page = ReportPage()
         self.attachments = AttachmentsPage()
         self.settings_page = SettingsPage()
-        for page in (self.dashboard, self.emails, self.flagged, self.attachments, self.settings_page):
+        for page in (
+            self.dashboard,
+            self.emails,
+            self.flagged,
+            self.pending_page,
+            self.report_page,
+            self.attachments,
+            self.settings_page,
+        ):
             self.stack.addWidget(page)
         main.addWidget(self.stack, 1)
         root_layout.addLayout(main, 1)
@@ -847,8 +1255,10 @@ class MainWindow(QMainWindow):
             ("▦  Panel principal", 0),
             ("✉  Correos", 1),
             ("⚑  Marcados en Outlook", 2),
-            ("▣  Adjuntos", 3),
-            ("⚙  Configuración", 4),
+            ("↩  Pendientes de respuesta", 3),
+            ("▤  Informe de correos", 4),
+            ("▣  Adjuntos", 5),
+            ("⚙  Configuración", 6),
         ]
         for text, index in buttons:
             button = QPushButton(text)
@@ -864,7 +1274,7 @@ class MainWindow(QMainWindow):
         status.setObjectName("SidebarStatus")
         status.setToolTip("La interfaz se ejecuta únicamente en este ordenador.")
         layout.addWidget(status)
-        version = QLabel("Desktop UI 1.0")
+        version = QLabel("Desktop UI 1.3")
         version.setObjectName("SidebarStatus")
         layout.addWidget(version)
         return sidebar
@@ -925,6 +1335,8 @@ class MainWindow(QMainWindow):
             ("Panel principal", "Resumen del procesamiento y del estado de Outlook"),
             ("Correos", "Archivo de correos organizados por proyecto"),
             ("Marcados en Outlook", "Correos identificados como procesados por el asistente"),
+            ("Pendientes de respuesta", "Mensajes que necesitan una respuesta escrita de la empresa"),
+            ("Informe de correos", "Resumen generado de los correos archivados"),
             ("Adjuntos", "Archivos guardados y bloqueados por seguridad"),
             ("Configuración", "Estado de la aplicación local y sus rutas"),
         ]
@@ -936,10 +1348,21 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Actualizando datos locales...")
         try:
             rows = data_service.load_index_rows()
+            activity_rows = data_service.load_activity_rows()
             attachments = data_service.load_attachment_rows()
+            pending_rows = data_service.load_pending_rows()
+            report_rows = data_service.load_report_rows()
             processed = data_service.processed_ids_count()
-            self.dashboard.update_local_data(rows, attachments, processed)
+            self.dashboard.update_local_data(
+                rows,
+                attachments,
+                processed,
+                activity_rows,
+                pending_rows,
+            )
             self.emails.set_rows(rows)
+            self.pending_page.set_rows(pending_rows)
+            self.report_page.set_rows(report_rows)
             self.attachments.set_rows(attachments)
             self.settings_page.refresh_status()
             self.statusBar().showMessage("Datos locales actualizados", 4000)
@@ -1029,15 +1452,13 @@ def priority_label(value: Any) -> str:
         priority = int(value)
     except (TypeError, ValueError):
         return "—"
-
-    labels = {
+    return {
         5: "5 - Crítica",
         4: "4 - Alta",
         3: "3 - Normal",
         2: "2 - Baja",
         1: "1 - Muy baja",
-    }
-    return labels.get(priority, str(priority))
+    }.get(priority, str(priority))
 
 
 def apply_priority_style(
@@ -1050,18 +1471,15 @@ def apply_priority_style(
         priority = int(value)
     except (TypeError, ValueError):
         return
-
-    palette = {
+    colors = {
         5: ("#ffe4e6", "#fecdd3", "#9f1239"),
         4: ("#ffedd5", "#fed7aa", "#9a3412"),
         3: ("#fef9c3", "#fef08a", "#854d0e"),
-    }
-    colors = palette.get(priority)
+    }.get(priority)
     if not colors:
         return
-
-    row_background, strong_background, foreground = colors
-    item.setBackground(QColor(strong_background if emphasize else row_background))
+    background, strong_background, foreground = colors
+    item.setBackground(QColor(strong_background if emphasize else background))
     item.setForeground(QColor(foreground))
     if emphasize:
         font = item.font()

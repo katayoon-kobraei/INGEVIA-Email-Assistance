@@ -202,6 +202,49 @@ QLabel#MetricHint {
     font-size: 11px;
 }
 
+QWidget#MetricSlidePage {
+    background: transparent;
+}
+QLabel#MetricDetailTitle {
+    color: #243b53;
+    font-size: 14px;
+    font-weight: 800;
+}
+QLabel#MetricDetailText {
+    color: #42566f;
+    font-size: 11px;
+}
+QLabel#MetricDetailStatus {
+    color: #243b53;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel#MetricDetailFooter {
+    color: #8293a8;
+    font-size: 9px;
+    font-style: italic;
+}
+QFrame#MetricCard[tone="green"]:hover {
+    border: 2px solid #16a34a;
+    border-left: 5px solid #16a34a;
+}
+QFrame#MetricCard[tone="orange"]:hover {
+    border: 2px solid #f59e0b;
+    border-left: 5px solid #f59e0b;
+}
+QFrame#MetricCard[tone="blue"]:hover {
+    border: 2px solid #2f80ed;
+    border-left: 5px solid #2f80ed;
+}
+QFrame#MetricCard[tone="red"]:hover {
+    border: 2px solid #e5484d;
+    border-left: 5px solid #e5484d;
+}
+QFrame#MetricCard[tone="purple"]:hover {
+    border: 2px solid #7c3aed;
+    border-left: 5px solid #7c3aed;
+}
+
 /* Status pills */
 QLabel#SuccessPill {
     color: #087443;
