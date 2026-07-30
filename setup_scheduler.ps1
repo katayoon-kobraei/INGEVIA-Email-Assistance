@@ -11,11 +11,11 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 $Action = New-ScheduledTaskAction -Execute $PythonExe -Argument "`"$PipelineScript`"" -WorkingDirectory $ProjectRoot
 
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 2) `
+    -RepetitionInterval (New-TimeSpan -Minutes 30) `
     -RepetitionDuration (New-TimeSpan -Days 3650)   # ~10 years — Task Scheduler can't handle TimeSpan.MaxValue
 
 $Settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 7) `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 40) `
     -MultipleInstances IgnoreNew `
     -Compatibility Win8
 

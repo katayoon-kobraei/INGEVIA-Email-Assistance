@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-    Write-Host "No se encontró .venv. Créalo con: py -m venv .venv" -ForegroundColor Yellow
+    Write-Host "No se encontró .venv. Ejecuta INSTALAR.bat primero." -ForegroundColor Yellow
     exit 1
 }
 

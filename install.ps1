@@ -18,5 +18,11 @@ Write-Host "Installing dependencies..."
 & $PythonExe -m pip install --upgrade pip --quiet
 & $PythonExe -m pip install -e $ProjectRoot --quiet
 
+$DesktopRequirements = Join-Path $ProjectRoot "requirements-desktop.txt"
+if (Test-Path $DesktopRequirements) {
+    Write-Host "Installing dashboard dependencies..."
+    & $PythonExe -m pip install -r $DesktopRequirements --quiet
+}
+
 Write-Host "Done. Environment is ready."
 Write-Host "Next: run setup_scheduler.ps1 to register the automatic email check."
