@@ -10,7 +10,9 @@ Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Silent
 $Action = New-ScheduledTaskAction -Execute $PythonExe -Argument "`"$EvalScript`"" -WorkingDirectory $ProjectRoot
 
 # Every morning at 8:00 AM -- change -At to taste.
-$Trigger = New-ScheduledTaskTrigger -Daily -At 8am
+$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $Settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
