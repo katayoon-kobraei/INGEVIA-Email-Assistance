@@ -1,3 +1,7 @@
+import datetime
+
+import win32com.client
+
 from src.config import (
     OUTPUT_ROOT,
     ensure_output_root,
@@ -5,6 +9,7 @@ from src.config import (
     PROCESSED_CATEGORY_NAME,
     CHECK_PENDING_RESPONSES,
     PENDING_FOLDER_NAME,
+    LOOKBACK_MINUTES,
 )
 from src.ingestion.outlook_local import get_recent_emails
 from src.output.save_email import save_email
@@ -20,7 +25,7 @@ from src.output.save_email import save_email, save_billing_email, save_plenergy_
 from src.output.outlook_forward import forward_email
 from src.config import BOSS_EMAIL, ADMINISTRACION_EMAIL, BILLING_OUTPUT_ROOT
 from src.classification.plenergy_agent import classify_plenergy_address
-from src.output.plenergy_routing import is_plenergy_sender, extract_us_code, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
+from src.output.plenergy_routing import is_plenergy_sender, extract_us_codes, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
 from src.output.priority_list import append_to_priority_list
 from src.output.project_folders import (
     list_existing_projects,
@@ -37,16 +42,21 @@ from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.report_writer import append_to_report_log, generate_email_report_xlsx, cheap_fallback_summary
 from src.output.status_page import generate_status_page
+from src.output.run_state import load_last_run_time, save_last_run_time
+from src.output.folder_namer import normalize_plenergy_plainco_name
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-def _retry_pending_flags():
+def _retry_pending_flags(outlook=None):
     """Emails whose Outlook flag failed on a previous run (usually
     because that exact email was open/selected in Outlook at the
-    time) get retried here, before anything new is processed."""
+    time) get retried here, before anything new is processed.
+
+    outlook: an already-open MAPI namespace to reuse -- see
+    mark_email_processed in outlook_flag.py for why this matters."""
     if not FLAG_PROCESSED_EMAILS:
         return
     pending = load_pending_flags(OUTPUT_ROOT)
@@ -54,14 +64,17 @@ def _retry_pending_flags():
         return
     print(f"Retrying {len(pending)} email(s) whose Outlook flag failed last run...")
     for entry_id, category in list(pending.items()):
-        if mark_email_processed(entry_id, category):
+        if mark_email_processed(entry_id, category, outlook):
             remove_pending_flag(OUTPUT_ROOT, entry_id)
             print(f"  Flagged on retry: {entry_id}")
 
 
-def _retry_pending_copies():
+def _retry_pending_copies(outlook=None):
     """Retries pending-response emails whose copy to PENDING_FOLDER_NAME
-    failed last run."""
+    failed last run.
+
+    outlook: an already-open MAPI namespace to reuse -- see
+    mark_email_processed in outlook_flag.py for why this matters."""
     if not CHECK_PENDING_RESPONSES:
         return
     pending = load_pending_copies(OUTPUT_ROOT)
@@ -69,19 +82,22 @@ def _retry_pending_copies():
         return
     print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
     for entry_id, folder_name in list(pending.items()):
-        if copy_email(entry_id, folder_name):
+        if copy_email(entry_id, folder_name, outlook):
             remove_pending_copy(OUTPUT_ROOT, entry_id)
             print(f"  Copied on retry: {entry_id} -> {folder_name}")
 
-def _mark_done(email):
+def _mark_done(email, outlook=None):
     """Marks an email as processed locally (dedupe state) and, if
     enabled, stamps it back in Outlook so the boss can see it was
     handled. If the Outlook write fails (e.g. the email was
-    open/selected at that moment), it's queued to retry next run."""
+    open/selected at that moment), it's queued to retry next run.
+
+    outlook: an already-open MAPI namespace to reuse -- see
+    mark_email_processed in outlook_flag.py for why this matters."""
     mark_processed(email["id"], OUTPUT_ROOT)
     if not FLAG_PROCESSED_EMAILS:
         return
-    ok = mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+    ok = mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME, outlook)
     if ok:
         remove_pending_flag(OUTPUT_ROOT, email["id"])
     else:
@@ -89,13 +105,16 @@ def _mark_done(email):
         print(f"  (Outlook flag failed -- will retry automatically next run)")
 
 
-def _handle_post_filing_checks(email):
+def _handle_post_filing_checks(email, outlook=None):
     """Runs the merged pending-response + priority check exactly once
     per filed email, in a single Gemini call (replaces the old separate
     _handle_pending_check + _handle_priority_check, which each re-sent
     the full email body independently). Priority is logged for every
     filed email; the pending-response copy/log only applies to incoming
-    mail, same as before."""
+    mail, same as before.
+
+    outlook: an already-open MAPI namespace to reuse -- see
+    mark_email_processed in outlook_flag.py for why this matters."""
     try:
         result = classify_post_filing(email)
     except Exception as e:
@@ -111,7 +130,7 @@ def _handle_post_filing_checks(email):
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
-    ok = copy_email(email["id"], PENDING_FOLDER_NAME)
+    ok = copy_email(email["id"], PENDING_FOLDER_NAME, outlook)
     if ok:
         remove_pending_copy(OUTPUT_ROOT, email["id"])
     else:
@@ -120,11 +139,45 @@ def _handle_post_filing_checks(email):
 
 def run():
     ensure_output_root()
-    _retry_pending_flags()
-    _retry_pending_copies()
+
+    # One shared Outlook connection for the entire run, threaded through
+    # every function below instead of each one opening (and never
+    # closing) its own. Repeatedly Dispatch()-ing a fresh
+    # "Outlook.Application" connection from many separate functions,
+    # run every few minutes all day by the scheduled task, is what
+    # exhausted Outlook's internal resource pool and caused "Outlook ha
+    # agotado todos los recursos compartidos" -- one connection per run
+    # avoids that entirely.
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+
+    _retry_pending_flags(outlook)
+    _retry_pending_copies(outlook)
     processed = load_processed_ids(OUTPUT_ROOT)
-    emails = get_recent_emails(20)
-    print(f"Found {len(emails)} email(s), {len(processed)} already processed.")
+
+    # How far back to look: normally just LOOKBACK_MINUTES (see
+    # config.py), which comfortably covers the gap between two
+    # scheduled runs during the day. But the scheduled task now only
+    # runs 05:30-20:00, so the first run of the day follows an
+    # overnight gap of roughly 9.5 hours, not 30 minutes -- a fixed
+    # window would silently miss everything sent overnight. Instead,
+    # look back to the timestamp of the last successful run (whatever
+    # that gap actually was), with LOOKBACK_MINUTES as the floor and a
+    # 5-minute safety margin added on top so a run that starts a
+    # little late never leaves a sliver of a gap. This also
+    # self-corrects for weekends, holidays, or a run that gets skipped
+    # for some unrelated reason -- the next run just closes whatever
+    # gap actually happened, without needing to special-case "the
+    # first run of the day".
+    run_started_at = datetime.datetime.now(datetime.timezone.utc)
+    last_run = load_last_run_time(OUTPUT_ROOT)
+    minutes_back = LOOKBACK_MINUTES
+    if last_run is not None:
+        gap_minutes = (run_started_at - last_run).total_seconds() / 60
+        minutes_back = max(LOOKBACK_MINUTES, gap_minutes + 5)
+
+    emails = get_recent_emails(minutes_back, outlook=outlook)
+    save_last_run_time(OUTPUT_ROOT, run_started_at)
+    print(f"Found {len(emails)} email(s), {len(processed)} already processed. (looked back {minutes_back:.0f} min)")
 
     for email in emails:
         if email["id"] in processed:
@@ -153,7 +206,7 @@ def run():
                     if administracion_is_recipient(email):
                         print(f"Saved (billing, admin already on it): {email['subject']} -> {folder}")
                     else:
-                        ok = forward_email(email["id"], ADMINISTRACION_EMAIL)
+                        ok = forward_email(email["id"], ADMINISTRACION_EMAIL, outlook)
                         if ok:
                             print(f"Saved (billing) and forwarded to {ADMINISTRACION_EMAIL}: {email['subject']} -> {folder}")
                         else:
@@ -162,19 +215,31 @@ def run():
 
             if is_plenergy_sender(email):
                 email_year = email["timestamp"].year
-                us_code = extract_us_code(email)
+                us_codes = extract_us_codes(email)
                 contact_label = "PLAINCO" if "plainco.es" in (email.get("sender") or "").lower() else "PLENERGY"
 
-                # Fast path: explicit US code, cheap string match, no token cost.
-                match_result = resolve_plenergy_folder(OUTPUT_ROOT, email_year, us_code) if us_code else None
+                # Fast path: resolve EVERY US code mentioned to its own
+                # folder, not just the first one. Most emails mention
+                # exactly one station, but some cover two at once (e.g.
+                # a subject naming both US552 and US574) -- those need
+                # to land in both stations' folders, not just one.
+                matches = []  # list of (topic_label, project_folder_name, address_folder_name)
+                for code in us_codes:
+                    resolved = resolve_plenergy_folder(OUTPUT_ROOT, email_year, code)
+                    if resolved:
+                        project_folder_name, address_folder_name = resolved
+                        matches.append((code, project_folder_name, address_folder_name))
 
-                # Fallback: no US code mentioned, or the code found doesn't
-                # literally match any folder name -- let the model judge by
-                # full context (address, town, nickname) instead. If it
-                # also finds no match, this same call already returned a
-                # proposed site name + contact name, used below.
+                # Fallback: no US code matched anything on file yet --
+                # let the model judge by full context (address, town,
+                # nickname) instead. Only tried when NOTHING resolved
+                # deterministically, same as before -- if one code out
+                # of two already matched, that's good enough to skip
+                # the extra Gemini call. If it also finds no match,
+                # this same call already returned a proposed site name
+                # + contact name, used below.
                 llm_match = None
-                if not match_result:
+                if not matches:
                     do_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, DO_PLENERGY_FOLDER)
                     project_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, PLENERGY_FOLDER)
                     try:
@@ -184,18 +249,33 @@ def run():
                         llm_match = None
 
                     if llm_match is not None and llm_match.matched_existing:
-                        match_result = (llm_match.matched_folder, llm_match.address_folder_name)
+                        llm_topic_label = us_codes[0] if len(us_codes) == 1 else "ESTACION IDENTIFICADA"
+                        matches.append((llm_topic_label, llm_match.matched_folder, llm_match.address_folder_name))
 
                 # llm_match is None whenever the deterministic US-code fast
                 # path resolved it (no Gemini call happened at all) -- fall
                 # back to a free, non-LLM summary in that one case only.
                 row_summary = llm_match.summary if llm_match is not None else cheap_fallback_summary(email)
 
-                if match_result:
-                    project_folder_name, address_folder_name = match_result
-                    topic_label = us_code or "ESTACION IDENTIFICADA"
-                    folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
-                    append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                saved_folders = []
+                if matches:
+                    # Save (and log) a copy under EVERY matched station --
+                    # this is safe to do more than once for the same
+                    # email: each call re-reads the .msg/PDF/attachments
+                    # fresh from Outlook into its own destination folder,
+                    # nothing is shared or moved between them.
+                    for topic_label, project_folder_name, address_folder_name in matches:
+                        folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name, outlook=outlook)
+                        append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                        append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
+                        saved_folders.append(folder)
+
+                    matched_labels = {m[0] for m in matches}
+                    still_unresolved = [c for c in us_codes if c not in matched_labels]
+                    if still_unresolved:
+                        codes_str = ", ".join(still_unresolved)
+                        station_word = "station" if len(still_unresolved) == 1 else "stations"
+                        print(f"  Note: subject also mentions {codes_str} -- filed under {len(matches)} matched folder(s) only; check manually if it also belongs under that {station_word}.")
                 else:
                     site_hint = llm_match.address_folder_name.strip() if llm_match and llm_match.address_folder_name else ""
                     contact_name = llm_match.contact_name.strip() if llm_match and llm_match.contact_name else ""
@@ -206,15 +286,19 @@ def run():
                         parts.append(site_hint)
                     if contact_name:
                         parts.append(contact_name)
-                    folder_label = " ".join(parts)
+                    folder_label = normalize_plenergy_plainco_name(" ".join(parts))
 
-                    folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label)
+                    folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label, outlook=outlook)
                     append_to_index(email, get_holding_pen_name(email_year), contact_label, folder_label, folder, OUTPUT_ROOT, None)
+                    append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
+                    saved_folders.append(folder)
 
-                append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
-                _mark_done(email)
-                print(f"Saved (Plenergy): {email['subject']} -> {folder}")
-                _handle_post_filing_checks(email)
+                _mark_done(email, outlook)
+                if len(saved_folders) > 1:
+                    print(f"Saved (Plenergy, {len(saved_folders)} stations): {email['subject']} -> " + " | ".join(saved_folders))
+                else:
+                    print(f"Saved (Plenergy): {email['subject']} -> {saved_folders[0]}")
+                _handle_post_filing_checks(email, outlook)
                 continue
 
             email_year = email["timestamp"].year
@@ -274,13 +358,13 @@ def run():
                 project_folder_name, contact_label, topic_label = "UNSORTED", "DESCONOCIDO", "SIN CLASIFICAR"
                 summary = cheap_fallback_summary(email)
 
-            folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
+            folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name, outlook=outlook)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
             append_to_report_log(email, contact_label, summary, folder, OUTPUT_ROOT)
-            _mark_done(email)
+            _mark_done(email, outlook)
             print(f"Saved: {email['subject']} -> {folder}")
 
-            _handle_post_filing_checks(email)
+            _handle_post_filing_checks(email, outlook)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue

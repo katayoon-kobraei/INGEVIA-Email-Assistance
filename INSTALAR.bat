@@ -54,13 +54,14 @@ if errorlevel 1 (
     echo La comprobacion no ha funcionado. Las causas mas habituales son
     echo una clave de Gemini incorrecta en .env, o que Outlook este cerrado.
     echo Puedes seguir con la instalacion y solucionarlo despues -- la
-    echo revision automatica volvera a intentarlo sola cada 2 minutos.
+    echo revision automatica volvera a intentarlo sola en el siguiente
+    echo pase, cada 30 minutos entre las 05:30 y las 20:00.
     echo.
     pause
 )
 
 echo.
-echo [3/4] Activando la revision automatica de correo ^(cada 2 minutos^)...
+echo [3/4] Activando la revision automatica de correo ^(cada 30 min, 05:30-20:00^)...
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\setup_scheduler.ps1"
 
 echo.
@@ -72,7 +73,8 @@ echo ================================================
 echo   Instalacion completada.
 echo.
 echo   A partir de ahora el correo se clasifica solo
-echo   cada 2 minutos, incluso si cierras esta ventana.
+echo   cada 30 minutos, entre las 05:30 y las 20:00,
+echo   incluso si cierras esta ventana.
 echo.
 echo   Usa "ABRIR PANEL.bat" cuando quieras ver el estado.
 echo ================================================

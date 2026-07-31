@@ -47,8 +47,13 @@ def _fetch_from_folder(outlook, folder_id, minutes_back, direction):
             
     return results
 
-def get_recent_emails(minutes_back: int = 30) -> list[dict]:
-    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+def get_recent_emails(minutes_back: int = 30, outlook=None) -> list[dict]:
+    """outlook: an already-open MAPI namespace to reuse (pipeline.py
+    passes one shared connection through the whole run). If not given,
+    connects fresh -- kept for standalone scripts that call this
+    directly without going through pipeline.py."""
+    if outlook is None:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     inbound = _fetch_from_folder(outlook, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")
     outbound = _fetch_from_folder(outlook, SENT_FOLDER_ID, minutes_back, "SALIENTE")
     return inbound + outbound

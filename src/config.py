@@ -98,5 +98,25 @@ IGNORE_SENDERS = os.environ.get("IGNORE_SENDERS") or "fmunoz@munozbosch.com"
 
 PLENERGY_SENDER_DOMAINS = os.environ.get("PLENERGY_SENDER_DOMAINS") or "plenergy.es,plainco.es"
 
+# The MINIMUM the pipeline ever looks back for emails on each run.
+# This MUST be longer than however often the Windows Scheduled Task
+# actually runs the pipeline (see setup_scheduler.ps1 / Task
+# Scheduler), or an email could land in the gap between two runs and
+# be silently skipped. Defaults to 35 to safely cover the normal
+# 30-minute schedule with a 5-minute margin for a run that starts a
+# bit late. If you ever change how often the scheduled task runs
+# during the day, update this to match (interval + 5-10 min margin) in
+# .env, e.g.:
+#   LOOKBACK_MINUTES=35
+#
+# Note: this is only a floor, not the actual window used on every run.
+# src/pipeline.py (via src/output/run_state.py) remembers when it last
+# ran successfully and automatically looks back further than this when
+# the gap since that last run is bigger -- e.g. the first run of the
+# day at 05:30 automatically covers the ~9.5-hour overnight gap since
+# the previous day's last run at 20:00, without needing a separate
+# setting for that.
+LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES") or "35")
+
 def ensure_output_root():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)

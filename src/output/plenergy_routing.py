@@ -50,17 +50,32 @@ def is_plenergy_sender(email):
     return any(domain == d or domain.endswith("." + d) for d in domains)
 
 
-def extract_us_code(email):
-    """Pulls the station's 'US' (Unidad de Suministro) code out of the
+def extract_us_codes(email):
+    """Pulls every distinct 'US' (Unidad de Suministro) code out of the
     email's subject or body -- e.g. 'US552', 'US188A' -- tolerating the
-    usual formatting variations ('US 552', '(US574)'). Returns a
-    normalized 'US{code}' string, or None if no US code appears
-    anywhere in the email."""
+    usual formatting variations ('US 552', '(US574)'). Returns them as
+    a list of normalized 'US{code}' strings, in the order they first
+    appear, deduplicated. Returns an empty list if none are found.
+
+    Some emails mention two stations at once (e.g. a subject naming
+    both US552 and US574) -- those need to be filed under both
+    stations' folders, not just the first one found, which is why this
+    returns every match instead of just the first."""
     text = f"{email.get('subject') or ''} {email.get('body') or ''}"
-    match = US_CODE_RE.search(text)
-    if not match:
-        return None
-    return f"US{match.group(1).upper()}"
+    codes = []
+    for match in US_CODE_RE.finditer(text):
+        code = f"US{match.group(1).upper()}"
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def extract_us_code(email):
+    """Same as extract_us_codes, but returns just the first code found
+    (or None) -- kept for any caller that only ever expects a single
+    station per email."""
+    codes = extract_us_codes(email)
+    return codes[0] if codes else None
 
 
 def _normalize_for_us_match(text):

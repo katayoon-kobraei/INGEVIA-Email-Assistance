@@ -74,12 +74,19 @@ def save_billing_email(email, output_root):
 
 
 
-def _save_as_msg(entry_id, folder_path):
+def _save_as_msg(entry_id, folder_path, outlook=None):
     """Saves a native Outlook .msg copy alongside the .txt/.pdf
     versions -- re-fetches the live item by EntryID, same pattern
-    used in outlook_flag.py/outlook_archive.py."""
+    used in outlook_flag.py/outlook_archive.py.
+
+    outlook: an already-open MAPI namespace to reuse -- this is called
+    once per saved email, so on a run that files several emails, not
+    reusing one shared connection here was a big contributor to
+    Outlook's "resources exhausted" errors under long-running,
+    frequent automation. If not given, connects fresh."""
     try:
-        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        if outlook is None:
+            outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
         item = outlook.GetItemFromID(entry_id)
         item.SaveAs(os.path.join(folder_path, "email.msg"), OL_SAVE_AS_MSG)
     except Exception as e:
@@ -164,7 +171,7 @@ def _make_unique_folder(base_path):
     return folder_path
 
 
-def save_email(email, project_folder_name, contact_label, topic_label, output_root, address_folder_name=None):
+def save_email(email, project_folder_name, contact_label, topic_label, output_root, address_folder_name=None, outlook=None):
     is_formal = is_formal_project_code(project_folder_name) or project_folder_name in RESERVED_TOP_LEVEL_NAMES
 
     if is_formal:
@@ -207,7 +214,7 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path)
+    _save_as_msg(email["id"], folder_path, outlook)
     _save_as_pdf(email, folder_path)
 
     attachment_results = []
@@ -240,7 +247,7 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     return folder_path
 
-def save_department_email(email, department_folder_name, output_root):
+def save_department_email(email, department_folder_name, output_root, outlook=None):
     """Files department mail (e.g. the secretary's domain) directly
     under OUTPUT_ROOT/DEPARTAMENTOS/<department> -- bypasses the whole
     TRABAJOS/project-folder resolution since this isn't client
@@ -259,7 +266,7 @@ def save_department_email(email, department_folder_name, output_root):
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path)
+    _save_as_msg(email["id"], folder_path, outlook)
     _save_as_pdf(email, folder_path)
 
 
@@ -291,7 +298,7 @@ def save_department_email(email, department_folder_name, output_root):
     return folder_path
 
 
-def save_plenergy_fallback_email(email, output_root, folder_label):
+def save_plenergy_fallback_email(email, output_root, folder_label, outlook=None):
     """Files an unmatched Plenergy/Plainco email as a single flat
     folder directly inside that year's holding pen (e.g. "26-000
     MAILS"), named with date + company tag + site hint + contact name
@@ -312,7 +319,7 @@ def save_plenergy_fallback_email(email, output_root, folder_label):
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path)
+    _save_as_msg(email["id"], folder_path, outlook)
     _save_as_pdf(email, folder_path)
 
     attachment_results = []

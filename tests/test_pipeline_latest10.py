@@ -22,7 +22,7 @@ from src.output.outlook_flag import mark_email_processed
 from src.output.outlook_archive import copy_email
 from src.output.report_writer import append_to_report_log, generate_email_report_xlsx, cheap_fallback_summary
 from src.classification.plenergy_agent import classify_plenergy_address
-from src.output.plenergy_routing import is_plenergy_sender, extract_us_code, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
+from src.output.plenergy_routing import is_plenergy_sender, extract_us_codes, resolve_plenergy_folder, DO_PLENERGY_FOLDER, PLENERGY_FOLDER
 from src.output.flag_state import load_pending_flags, add_pending_flag, remove_pending_flag
 from src.output.pending_copy_state import load_pending_copies, add_pending_copy, remove_pending_copy
 from src.output.pending_list import append_to_pending_list
@@ -43,14 +43,14 @@ from src.classification.project_agent import classify_project
 from src.classification.address_agent import classify_address
 from src.output.index_writer import append_to_index
 from src.output.status_page import generate_status_page
+from src.output.folder_namer import normalize_plenergy_plainco_name
 
 INBOX_FOLDER_ID = 6
 COUNT = 3
 
 
-def _get_latest_inbox_emails(count):
+def _get_latest_inbox_emails(count, outlook):
     """Local to this script only -- does not touch outlook_local.py."""
-    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
     folder = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
     messages = folder.Items
     messages.Sort("[ReceivedTime]", True)
@@ -77,7 +77,7 @@ def _get_latest_inbox_emails(count):
     return results
 
 
-def _retry_pending_flags():
+def _retry_pending_flags(outlook):
     if not FLAG_PROCESSED_EMAILS:
         return
     pending = load_pending_flags(OUTPUT_ROOT)
@@ -85,12 +85,12 @@ def _retry_pending_flags():
         return
     print(f"Retrying {len(pending)} email(s) whose Outlook flag failed last run...")
     for entry_id, category in list(pending.items()):
-        if mark_email_processed(entry_id, category):
+        if mark_email_processed(entry_id, category, outlook):
             remove_pending_flag(OUTPUT_ROOT, entry_id)
             print(f"  Flagged on retry: {entry_id}")
 
 
-def _retry_pending_copies():
+def _retry_pending_copies(outlook):
     if not CHECK_PENDING_RESPONSES:
         return
     pending = load_pending_copies(OUTPUT_ROOT)
@@ -98,17 +98,17 @@ def _retry_pending_copies():
         return
     print(f"Retrying {len(pending)} pending-email copy(ies) that failed last run...")
     for entry_id, folder_name in list(pending.items()):
-        if copy_email(entry_id, folder_name):
+        if copy_email(entry_id, folder_name, outlook):
             remove_pending_copy(OUTPUT_ROOT, entry_id)
             print(f"  Copied on retry: {entry_id} -> {folder_name}")
 
 
-def _mark_done(email):
+def _mark_done(email, outlook):
     mark_processed(email["id"], OUTPUT_ROOT)
     if not FLAG_PROCESSED_EMAILS:
         print("  (Outlook flag skipped -- FLAG_PROCESSED_EMAILS is off in .env)")
         return
-    ok = mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME)
+    ok = mark_email_processed(email["id"], PROCESSED_CATEGORY_NAME, outlook)
     if ok:
         remove_pending_flag(OUTPUT_ROOT, email["id"])
         print("  (Outlook flag: applied OK)")
@@ -117,7 +117,7 @@ def _mark_done(email):
         print("  (Outlook flag: FAILED -- queued to retry next run)")
 
 
-def _handle_post_filing_checks(email):
+def _handle_post_filing_checks(email, outlook):
     """Runs the merged pending-response + priority check exactly once
     per filed email, in a single Gemini call."""
     try:
@@ -136,21 +136,25 @@ def _handle_post_filing_checks(email):
         return
 
     append_to_pending_list(email, OUTPUT_ROOT)
-    ok = copy_email(email["id"], PENDING_FOLDER_NAME)
+    ok = copy_email(email["id"], PENDING_FOLDER_NAME, outlook)
     if ok:
         remove_pending_copy(OUTPUT_ROOT, email["id"])
         print(f"  (Copied to '{PENDING_FOLDER_NAME}' OK -- logged to pendientes.csv)")
     else:
         add_pending_copy(OUTPUT_ROOT, email["id"], PENDING_FOLDER_NAME)
         print("  (Copy to pending folder FAILED -- queued to retry next run)")
-        
+
 
 def run():
     ensure_output_root()
-    _retry_pending_flags()
-    _retry_pending_copies()
+    # Same shared-connection pattern as src/pipeline.py -- see the
+    # comment there for why this matters (Outlook resource exhaustion
+    # under repeated automation).
+    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    _retry_pending_flags(outlook)
+    _retry_pending_copies(outlook)
     processed = load_processed_ids(OUTPUT_ROOT)
-    emails = _get_latest_inbox_emails(COUNT)
+    emails = _get_latest_inbox_emails(COUNT, outlook)
     print(f"Testing pipeline on the {len(emails)} latest Inbox email(s) (ignoring time), {len(processed)} already processed.")
 
     for email in emails:
@@ -183,7 +187,7 @@ def run():
                     if administracion_is_recipient(email):
                         print(f"Saved (billing, admin already on it): {email['subject']} -> {folder}")
                     else:
-                        ok = forward_email(email["id"], ADMINISTRACION_EMAIL)
+                        ok = forward_email(email["id"], ADMINISTRACION_EMAIL, outlook)
                         if ok:
                             print(f"Saved (billing) and forwarded to {ADMINISTRACION_EMAIL}: {email['subject']} -> {folder}")
                         else:
@@ -192,19 +196,26 @@ def run():
 
             if is_plenergy_sender(email):
                 email_year = email["timestamp"].year
-                us_code = extract_us_code(email)
+                us_codes = extract_us_codes(email)
                 contact_label = "PLAINCO" if "plainco.es" in (email.get("sender") or "").lower() else "PLENERGY"
 
-                # Fast path: explicit US code, cheap string match, no token cost.
-                match_result = resolve_plenergy_folder(OUTPUT_ROOT, email_year, us_code) if us_code else None
+                # Fast path: resolve EVERY US code mentioned to its own
+                # folder, not just the first one -- some emails cover
+                # two stations at once (e.g. subject naming both US552
+                # and US574), and those need to land in both folders.
+                matches = []  # list of (topic_label, project_folder_name, address_folder_name)
+                for code in us_codes:
+                    resolved = resolve_plenergy_folder(OUTPUT_ROOT, email_year, code)
+                    if resolved:
+                        project_folder_name, address_folder_name = resolved
+                        matches.append((code, project_folder_name, address_folder_name))
 
-                # Fallback: no US code mentioned, or the code found doesn't
-                # literally match any folder name -- let the model judge by
-                # full context (address, town, nickname) instead. If it
-                # also finds no match, this same call already returned a
-                # proposed site name + contact name, used below.
+                # Fallback: no US code matched anything on file yet --
+                # let the model judge by full context (address, town,
+                # nickname) instead. Only tried when NOTHING resolved
+                # deterministically.
                 llm_match = None
-                if not match_result:
+                if not matches:
                     do_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, DO_PLENERGY_FOLDER)
                     project_candidates = list_existing_addresses(OUTPUT_ROOT, email_year, PLENERGY_FOLDER)
                     try:
@@ -214,15 +225,25 @@ def run():
                         llm_match = None
 
                     if llm_match is not None and llm_match.matched_existing:
-                        match_result = (llm_match.matched_folder, llm_match.address_folder_name)
+                        llm_topic_label = us_codes[0] if len(us_codes) == 1 else "ESTACION IDENTIFICADA"
+                        matches.append((llm_topic_label, llm_match.matched_folder, llm_match.address_folder_name))
 
                 row_summary = llm_match.summary if llm_match is not None else cheap_fallback_summary(email)
 
-                if match_result:
-                    project_folder_name, address_folder_name = match_result
-                    topic_label = us_code or "ESTACION IDENTIFICADA"
-                    folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
-                    append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                saved_folders = []
+                if matches:
+                    for topic_label, project_folder_name, address_folder_name in matches:
+                        folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name, outlook=outlook)
+                        append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                        append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
+                        saved_folders.append(folder)
+
+                    matched_labels = {m[0] for m in matches}
+                    still_unresolved = [c for c in us_codes if c not in matched_labels]
+                    if still_unresolved:
+                        codes_str = ", ".join(still_unresolved)
+                        station_word = "station" if len(still_unresolved) == 1 else "stations"
+                        print(f"  Note: subject also mentions {codes_str} -- filed under {len(matches)} matched folder(s) only; check manually if it also belongs under that {station_word}.")
                 else:
                     site_hint = llm_match.address_folder_name.strip() if llm_match and llm_match.address_folder_name else ""
                     contact_name = llm_match.contact_name.strip() if llm_match and llm_match.contact_name else ""
@@ -233,15 +254,19 @@ def run():
                         parts.append(site_hint)
                     if contact_name:
                         parts.append(contact_name)
-                    folder_label = " ".join(parts)
+                    folder_label = normalize_plenergy_plainco_name(" ".join(parts))
 
-                    folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label)
+                    folder = save_plenergy_fallback_email(email, OUTPUT_ROOT, folder_label, outlook=outlook)
                     append_to_index(email, get_holding_pen_name(email_year), contact_label, folder_label, folder, OUTPUT_ROOT, None)
+                    append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
+                    saved_folders.append(folder)
 
-                append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
-                _mark_done(email)
-                print(f"Saved (Plenergy): {email['subject']} -> {folder}")
-                _handle_post_filing_checks(email)
+                _mark_done(email, outlook)
+                if len(saved_folders) > 1:
+                    print(f"Saved (Plenergy, {len(saved_folders)} stations): {email['subject']} -> " + " | ".join(saved_folders))
+                else:
+                    print(f"Saved (Plenergy): {email['subject']} -> {saved_folders[0]}")
+                _handle_post_filing_checks(email, outlook)
                 continue
 
             
@@ -290,13 +315,13 @@ def run():
                 project_folder_name, contact_label, topic_label = "UNSORTED", "DESCONOCIDO", "SIN CLASIFICAR"
                 summary = cheap_fallback_summary(email)
 
-            folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name)
+            folder = save_email(email, project_folder_name, contact_label, topic_label, OUTPUT_ROOT, address_folder_name, outlook=outlook)
             append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
             append_to_report_log(email, contact_label, summary, folder, OUTPUT_ROOT)
-            _mark_done(email)
+            _mark_done(email, outlook)
             print(f"Saved: {email['subject']} -> {folder}")
 
-            _handle_post_filing_checks(email)
+            _handle_post_filing_checks(email, outlook)
         except Exception as e:
             print(f"Failed on {email['id']} ({email['subject']}): {e}")
             continue
