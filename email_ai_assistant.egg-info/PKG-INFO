@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: email-ai-assistant
-Version: 0.1.0
-Requires-Python: >=3.10
-Requires-Dist: pywin32
-Requires-Dist: google-genai
-Requires-Dist: python-dotenv
-Requires-Dist: openpyxl
-Requires-Dist: reportlab

@@ -1,5 +1,0 @@
-pywin32
-google-genai
-python-dotenv
-openpyxl
-reportlab
