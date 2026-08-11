@@ -42,7 +42,18 @@ from src.config import DESCRIPTIONS_XLSX_PATH, DESCRIPTION_MAX_CHARS
 _CODE_RE = re.compile(r"^(\d{2}-\d+)")
 _ADDRESS_PREFIX_RE = re.compile(r"^\d{2}-\d+-\d+\s+")
 
-_cache = {"mtime": None, "company": {}, "address": {}}
+# Same US-code pattern used in src/output/plenergy_routing.py (kept as a
+# separate copy here rather than imported, to keep this module
+# self-contained -- it has no other dependency on the output package).
+_US_CODE_RE = re.compile(r"US\s*-?\s*(\d{2,4}[A-Z]?)", re.IGNORECASE)
+
+_cache = {"mtime": None, "company": {}, "address": {}, "us_code_index": {}}
+
+
+def _extract_us_codes_from_text(text):
+    if not text:
+        return []
+    return [f"US{m.group(1).upper()}" for m in _US_CODE_RE.finditer(str(text))]
 
 
 def _normalize(text):
@@ -73,6 +84,7 @@ def _load():
         _cache["mtime"] = None
         _cache["company"] = {}
         _cache["address"] = {}
+        _cache["us_code_index"] = {}
         return
 
     mtime = os.path.getmtime(DESCRIPTIONS_XLSX_PATH)
@@ -81,6 +93,7 @@ def _load():
 
     company = {}
     address = {}  # address[company_code][normalized site text] = description
+    us_code_index = {}  # us_code_index[normalized US code] = [project_id, ...]
 
     wb = openpyxl.load_workbook(DESCRIPTIONS_XLSX_PATH, data_only=True)
     for sheet in wb.worksheets:
@@ -109,9 +122,25 @@ def _load():
                     str(site_desc), DESCRIPTION_MAX_CHARS
                 )
 
+            # Index every US (Unidad de Suministro) code mentioned anywhere
+            # in this row's own Dirección or Subfolder Descripción text,
+            # against this row's own project_id (e.g. '25-003-06'). Used by
+            # resolve_plenergy_folder's cross-year fallback to find a
+            # station that was set up in an earlier year's TRABAJOS folder
+            # -- possibly under different Plenergy branding (2025's
+            # PLENOIL/DO PLENOIL vs 2026's PLENERGY/DO PLENERGY). Only
+            # Plenergy-family rows ever mention a US code, so this index
+            # stays small regardless of how many other companies/years are
+            # in the sheet.
+            for code in _extract_us_codes_from_text(site) + _extract_us_codes_from_text(site_desc):
+                bucket = us_code_index.setdefault(code, [])
+                if project_id not in bucket:
+                    bucket.append(project_id)
+
     _cache["mtime"] = mtime
     _cache["company"] = company
     _cache["address"] = address
+    _cache["us_code_index"] = us_code_index
 
 
 def get_company_description(project_folder_name):
@@ -140,6 +169,25 @@ def get_address_description(company_folder_name, address_folder_name):
         return None
     bare_address = _ADDRESS_PREFIX_RE.sub("", address_folder_name or "")
     return site_map.get(_normalize(bare_address))
+
+
+def find_us_code_in_history(us_code):
+    """Searches every year/sheet in the reference spreadsheet for a
+    mention of the given US code (e.g. 'US584') in either the
+    Dirección or Subfolder Descripción column. Used by
+    resolve_plenergy_folder as a last-resort lookup when a station's US
+    code isn't found among the CURRENT year's on-disk folders -- the
+    station may have been set up in an earlier year's TRABAJOS folder
+    (e.g. still under the 2025 PLENOIL/DO PLENOIL branding, rather than
+    2026's PLENERGY/DO PLENERGY).
+
+    Returns a list of project_id strings from the 'ID proyecto' column
+    (e.g. ['25-003-06']) -- normally zero or one, but returned as a
+    list in case the same code is genuinely mentioned on more than one
+    row. Returns [] if the spreadsheet isn't configured, or doesn't
+    mention this code anywhere."""
+    _load()
+    return list(_cache["us_code_index"].get(us_code, []))
 
 
 def enrich_candidate_list(names, describe_fn):

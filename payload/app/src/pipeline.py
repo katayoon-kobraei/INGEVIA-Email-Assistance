@@ -238,9 +238,50 @@ def run():
                             print(f"Saved (billing) but forwarding FAILED: {email['subject']} -> {folder}")
                     continue
 
+            # Deterministic US-code match, tried for EVERY email regardless
+            # of sender -- this is a free, unambiguous string match (no AI
+            # call involved), so there's no reason to require the sender to
+            # be @plenergy.es/@plainco.es before trying it. A third party
+            # (a utility company, a contractor, the previous station owner,
+            # the town council) can just as easily mention a station's US
+            # code as Plenergy/Plainco themselves can -- and if they do,
+            # this is a free, unambiguous match either way.
+            email_year = email["timestamp"].year
+            us_codes = extract_us_codes(email)
+            us_code_matches = []  # list of (topic_label, project_folder_name, address_folder_name)
+            for code in us_codes:
+                resolved = resolve_plenergy_folder(ARCHIVE_ROOT, email_year, code)
+                if resolved:
+                    project_folder_name, address_folder_name = resolved
+                    us_code_matches.append((code, project_folder_name, address_folder_name))
+
+            if us_code_matches:
+                sender_lower = (email.get("sender") or "").lower()
+                contact_label = "PLAINCO" if "plainco.es" in sender_lower else "PLENERGY"
+                row_summary = cheap_fallback_summary(email)
+                saved_folders = []
+                for topic_label, project_folder_name, address_folder_name in us_code_matches:
+                    folder = save_email(email, project_folder_name, contact_label, topic_label, ARCHIVE_ROOT, address_folder_name, outlook=outlook)
+                    append_to_index(email, project_folder_name, contact_label, topic_label, folder, OUTPUT_ROOT, address_folder_name)
+                    append_to_report_log(email, contact_label, row_summary, folder, OUTPUT_ROOT)
+                    saved_folders.append(folder)
+
+                matched_labels = {m[0] for m in us_code_matches}
+                still_unresolved = [c for c in us_codes if c not in matched_labels]
+                if still_unresolved:
+                    codes_str = ", ".join(still_unresolved)
+                    station_word = "station" if len(still_unresolved) == 1 else "stations"
+                    print(f"  Note: subject also mentions {codes_str} -- filed under {len(us_code_matches)} matched folder(s) only; check manually if it also belongs under that {station_word}.")
+
+                _mark_done(email, outlook)
+                if len(saved_folders) > 1:
+                    print(f"Saved (Plenergy US-code match, {len(saved_folders)} stations): {email['subject']} -> " + " | ".join(saved_folders))
+                else:
+                    print(f"Saved (Plenergy US-code match): {email['subject']} -> {saved_folders[0]}")
+                _handle_post_filing_checks(email, outlook)
+                continue
+
             if is_plenergy_sender(email):
-                email_year = email["timestamp"].year
-                us_codes = extract_us_codes(email)
                 contact_label = "PLAINCO" if "plainco.es" in (email.get("sender") or "").lower() else "PLENERGY"
 
                 # Fast path: resolve EVERY US code mentioned to its own
@@ -438,6 +479,43 @@ def run():
                 existing_company = False
                 company_only = False
 
+            # Rescue check: this email is about to be routed to the holding
+            # pen (no company matched, or a company matched but no
+            # project/site fit). Before giving up, try the Plenergy/DO
+            # PLENERGY station matcher too -- but only when it wasn't
+            # already tried above, i.e. this sender isn't
+            # @plenergy.es/@plainco.es and no US code resolved earlier in
+            # this loop iteration. A third party writing about a specific
+            # station by street/town/nickname (a utility company, a
+            # contractor, the previous station owner, the town council)
+            # never mentions "Plenergy" by name anywhere in the email, so
+            # the general company matcher above has no way to recognize
+            # it -- it only gets shown real top-level company names, and
+            # nothing in a company-level description mentions individual
+            # station towns/streets, only each station's OWN subfolder
+            # description does. The Plenergy-specific matcher's whole job
+            # is exactly this kind of match, so it is worth a second look
+            # before this email is dropped in the holding pen.
+            rescued_via_plenergy = False
+            if (not is_plenergy_sender(email)) and ((not existing_company) or company_only):
+                try:
+                    do_candidates = list_existing_addresses(ARCHIVE_ROOT, email_year, DO_PLENERGY_FOLDER)
+                    project_candidates = list_existing_addresses(ARCHIVE_ROOT, email_year, PLENERGY_FOLDER)
+                    rescue_match = classify_plenergy_address(email, do_candidates, project_candidates)
+                except Exception as e:
+                    print(f"Plenergy rescue check failed for {email['subject']}: {e}")
+                    rescue_match = None
+
+                if rescue_match is not None and rescue_match.matched_existing:
+                    project_folder_name = rescue_match.matched_folder
+                    address_folder_name = rescue_match.address_folder_name
+                    topic_label = us_codes[0] if len(us_codes) == 1 else "ESTACION IDENTIFICADA"
+                    summary = rescue_match.summary or summary
+                    existing_company = True
+                    company_only = False
+                    rescued_via_plenergy = True
+                    print("  Rescued via Plenergy/DO PLENERGY station match (sender was not @plenergy.es/@plainco.es).")
+
             folder = save_email(
                 email, project_folder_name, contact_label, topic_label,
                 ARCHIVE_ROOT, address_folder_name, outlook=outlook,
@@ -450,7 +528,9 @@ def run():
             append_to_report_log(email, contact_label, summary, folder, OUTPUT_ROOT)
             _mark_done(email, outlook)
 
-            if existing_company and address_folder_name:
+            if rescued_via_plenergy:
+                route_kind = "Plenergy/DO PLENERGY rescue match"
+            elif existing_company and address_folder_name:
                 route_kind = "company + project"
             elif existing_company and company_only:
                 route_kind = f"{get_holding_pen_name(email_year)} (project not found)"
