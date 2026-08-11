@@ -387,12 +387,19 @@ def _fetch_from_folder(outlook: Any, folder_id: int, minutes_back: float, direct
 
 
 def get_recent_emails(minutes_back: int = 30, outlook: Any = None) -> list[dict]:
-    """Return recent standard mail items from Inbox and Sent Items.
+    """Return recent standard mail items from the Inbox only.
+
+    Sent Items is intentionally never scanned -- the app no longer
+    processes or files outgoing (SALIENTE) mail at all. This is the
+    single chokepoint that controls that: every email this function
+    returns has direction "ENTRANTE", so nothing downstream (folder
+    routing, prompts, the desktop viewer's live counts) ever sees a
+    SALIENTE email from a new pipeline run again. Already-filed
+    historical SALIENTE folders/records from before this change are
+    left untouched on disk.
 
     ``outlook`` may be an already-open MAPI namespace reused by the pipeline.
     """
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    inbound = _fetch_from_folder(outlook, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")
-    outbound = _fetch_from_folder(outlook, SENT_FOLDER_ID, minutes_back, "SALIENTE")
-    return inbound + outbound
+    return _fetch_from_folder(outlook, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")

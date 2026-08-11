@@ -265,8 +265,18 @@ def sender_display(record: dict[str, Any]) -> str:
     return name or email
 
 
+def _is_saliente(row: dict[str, Any]) -> bool:
+    """True if a CSV row is a legacy outgoing (SALIENTE) record. The app
+    no longer processes outgoing mail at all (see get_recent_emails in
+    src/ingestion/outlook_local.py), but old index.csv/report rows filed
+    before that change may still say SALIENTE -- this keeps them out of
+    every UI table, filter, and count everywhere data_service loads rows,
+    rather than patching each screen individually."""
+    return str(row.get("Direction") or row.get("Dirección") or "").strip().upper() == "SALIENTE"
+
+
 def load_index_rows() -> list[dict[str, Any]]:
-    rows = _read_csv(OUTPUT_ROOT / "index.csv")
+    rows = [row for row in _read_csv(OUTPUT_ROOT / "index.csv") if not _is_saliente(row)]
     priority_lookup = load_priority_lookup()
     report_lookup = load_report_lookup()
     pending_lookup = load_pending_lookup()
@@ -313,6 +323,8 @@ def load_report_rows() -> list[dict[str, Any]]:
     pending_lookup = load_pending_lookup()
     rows: list[dict[str, Any]] = []
     for row in _read_csv(REPORT_LOG_PATH):
+        if _is_saliente(row):
+            continue
         date_text = " ".join(
             part for part in (str(row.get("Date") or ""), str(row.get("Time") or "")) if part
         ).strip()
@@ -351,7 +363,7 @@ def load_activity_rows() -> list[dict[str, Any]]:
     records filed messages in ``index.csv`` and produces a human-readable report,
     so the UI can safely fall back to those rows when the activity log is absent.
     """
-    rows = _read_csv(OUTPUT_ROOT / "activity_log.csv")
+    rows = [row for row in _read_csv(OUTPUT_ROOT / "activity_log.csv") if not _is_saliente(row)]
     if not rows:
         return load_index_rows()
     priority_lookup = load_priority_lookup()
@@ -774,6 +786,11 @@ def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
                 continue
             if _safe_get(item, "Class") != MAIL_ITEM_CLASS:
                 continue
+            if bool(_safe_get(item, "Sent", False)):
+                # Legacy stamped Sent Items from before outgoing mail stopped
+                # being processed. Never shown -- the app no longer processes
+                # or displays SALIENTE anywhere.
+                continue
             categories = _categories(item)
             flag_status = int(_safe_get(item, "FlagStatus", 0) or 0)
             is_stamped = PROCESSED_CATEGORY_NAME in categories or flag_status == 2
@@ -781,8 +798,7 @@ def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
                 continue
             total += 1
             if len(rows) < limit:
-                direction = "SALIENTE" if bool(_safe_get(item, "Sent", False)) else "ENTRANTE"
-                rows.append(_outlook_item_row(item, direction))
+                rows.append(_outlook_item_row(item, "ENTRANTE"))
 
         rows.sort(key=lambda row: row.get("Fecha", ""), reverse=True)
         return OutlookFlagSummary(total=total, rows=rows[:limit], estimated=False)

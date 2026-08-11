@@ -614,7 +614,7 @@ class EmailsPage(QWidget):
         self.project_filter.addItem("All projects")
         self.direction_filter = QComboBox()
         self.direction_filter.addItems(
-            ["All directions", "Incoming", "Outgoing"]
+            ["All directions", "Incoming"]
         )
         self.status_filter = QComboBox()
         self.status_filter.addItems(
@@ -728,8 +728,6 @@ class EmailsPage(QWidget):
             if project != "All projects" and record.get("Project Folder") != project:
                 continue
             if direction == "Incoming" and record.get("Direction") != "ENTRANTE":
-                continue
-            if direction == "Outgoing" and record.get("Direction") != "SALIENTE":
                 continue
             if status == "Processed" and record.get("_status") != "PROCESADO":
                 continue
@@ -1702,10 +1700,11 @@ def configure_table(table: QTableWidget) -> None:
 
 
 def direction_label(value: str) -> str:
+    # Outgoing (SALIENTE) mail is never processed or shown anymore -- see
+    # get_recent_emails() in src/ingestion/outlook_local.py and
+    # data_service._is_saliente(). Only ENTRANTE is expected here now.
     if value == "ENTRANTE":
         return "Incoming"
-    if value == "SALIENTE":
-        return "Outgoing"
     return value
 
 
