@@ -4,13 +4,15 @@ import shutil
 import tempfile
 from xml.sax.saxutils import escape
 
-from src.output.folder_namer import build_conversation_folder_name, build_holding_pen_folder_name
+from src.output.folder_namer import build_conversation_folder_name, build_routed_email_folder_name
 from src.safety.attachment_scanner import check_attachment
 from src.output.project_folders import (
     resolve_project_relative_path,
     get_holding_pen_name,
+    get_project_year,
     is_formal_project_code,
     RESERVED_TOP_LEVEL_NAMES,
+    get_company_path,
 )
 
 import win32com.client
@@ -74,7 +76,7 @@ def save_billing_email(email, output_root):
 
 
 
-def _save_as_msg(entry_id, folder_path, outlook=None):
+def _save_as_msg(entry_id, folder_path, outlook=None, store_id=None):
     """Saves a native Outlook .msg copy alongside the .txt/.pdf
     versions -- re-fetches the live item by EntryID, same pattern
     used in outlook_flag.py/outlook_archive.py.
@@ -87,7 +89,7 @@ def _save_as_msg(entry_id, folder_path, outlook=None):
     try:
         if outlook is None:
             outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        item = outlook.GetItemFromID(entry_id)
+        item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
         item.SaveAs(os.path.join(folder_path, "email.msg"), OL_SAVE_AS_MSG)
     except Exception as e:
         print(f"Could not save .msg copy for {entry_id}: {e}")
@@ -161,6 +163,20 @@ def _save_as_pdf(email, folder_path):
 QUARANTINE_ROOT = r"C:\EmailAssistant\Quarantine"
 
 
+def _direction_folder(email):
+    """Return the only valid engineering mail direction folder.
+
+    Both incoming and outgoing mail use the exact same company/project
+    validation.  Once a real company + real project is matched, incoming
+    mail is filed under ENTRANTE and outgoing mail under SALIENTE.  Reject
+    any unexpected direction instead of silently filing it in the wrong side.
+    """
+    direction = str(email.get("direction") or "").strip().upper()
+    if direction not in {"ENTRANTE", "SALIENTE"}:
+        raise ValueError(f"Unsupported email direction: {direction or '(empty)'}")
+    return direction
+
+
 def _make_unique_folder(base_path):
     folder_path = base_path
     counter = 2
@@ -171,38 +187,78 @@ def _make_unique_folder(base_path):
     return folder_path
 
 
-def save_email(email, project_folder_name, contact_label, topic_label, output_root, address_folder_name=None, outlook=None):
+def save_email(
+    email,
+    project_folder_name,
+    contact_label,
+    topic_label,
+    output_root,
+    address_folder_name=None,
+    outlook=None,
+    company_only=False,
+    existing_company=None,
+):
+    """Save one project/client email according to the office routing rules.
+
+    v1.18 routing (same validation for incoming and outgoing):
+      * existing company + existing project/site ->
+        COMPANY / PROJECT / 03.-CORREO / ENTRANTE / EMAIL_FOLDER  (incoming)
+        COMPANY / PROJECT / 03.-CORREO / SALIENTE / EMAIL_FOLDER  (outgoing)
+      * existing company but no matching project/site ->
+        YY-000 MAILS / EMAIL_FOLDER
+      * company not found ->
+        YY-000 MAILS / EMAIL_FOLDER
+
+    ``project_folder_name`` is kept as the historical parameter name for index
+    compatibility, but for the normal classifier it now represents the matched
+    top-level COMPANY folder (or the proposed company name when no company was
+    found). ``address_folder_name`` represents the matched project/site folder.
+    """
+    email_year = email["timestamp"].year
+    direction_folder = _direction_folder(email)
     is_formal = is_formal_project_code(project_folder_name) or project_folder_name in RESERVED_TOP_LEVEL_NAMES
+    is_existing_company = is_formal if existing_company is None else bool(existing_company)
+    email_folder_name = build_routed_email_folder_name(email, project_folder_name, contact_label)
 
-    if is_formal:
-        # Formal projects (already have a "{yy}-{seq}" code) and
-        # UNSORTED stay top-level, in their own year, grouped under
-        # 03.-CORREO/ENTRANTE-SALIENTE as before.
-        year, relative_project_path = resolve_project_relative_path(
-            output_root, project_folder_name, email["timestamp"].year
-        )
+    if is_existing_company:
+        company_year = get_project_year(project_folder_name) or email_year
+        # A verified existing company lives directly under TRABAJOS <year>.
+        # Do not use get_company_path() for a non-coded real company because
+        # that legacy helper interprets non-coded names as holding-pen entries.
+        company_path = os.path.join(output_root, f"TRABAJOS {company_year}", project_folder_name)
 
-        # If this email is about a specific site for a company that
-        # has multiple sites, nest one level deeper into that
-        # address's own folder before 03.-CORREO.
-        if address_folder_name:
-            relative_project_path = os.path.join(relative_project_path, address_folder_name)
-
-        base_path = os.path.join(
-            output_root, f"TRABAJOS {year}", relative_project_path, "03.-CORREO",
-            email["direction"],
-            build_conversation_folder_name(email, contact_label, topic_label),
-        )
+        if company_only:
+            # The company is real and verified on disk, but no existing
+            # project/site matched this email. Boss requirement: do NOT create
+            # a new project and do NOT save in the company root. Put the same
+            # descriptive email folder in the year's 26-000 MAILS holding pen.
+            base_path = os.path.join(
+                output_root,
+                f"TRABAJOS {email_year}",
+                get_holding_pen_name(email_year),
+                email_folder_name,
+            )
+        else:
+            # A real existing project/site matched. Save beneath that project's
+            # existing 03.-CORREO direction structure.
+            destination = company_path
+            if address_folder_name:
+                destination = os.path.join(destination, address_folder_name)
+            base_path = os.path.join(
+                destination,
+                "03.-CORREO",
+                direction_folder,
+                email_folder_name,
+            )
     else:
-        # Not-yet-formal project: no company subfolder, no
-        # 03.-CORREO/ENTRANTE-SALIENTE nesting -- one flat,
-        # fully-descriptive folder per email, directly under that
-        # year's holding pen. address_folder_name is ignored here --
-        # there's no company folder left for it to nest under.
-        year = email["timestamp"].year
+        # No existing top-level company was found. Never invent a company or
+        # project folder in the real archive; put the email directly into the
+        # year's holding pen using the same human-readable naming convention.
         base_path = os.path.join(
-            output_root, f"TRABAJOS {year}", get_holding_pen_name(year),
-            build_holding_pen_folder_name(email, project_folder_name, contact_label, topic_label),
+            output_root,
+            f"TRABAJOS {email_year}",
+            get_holding_pen_name(email_year),
+            email_folder_name,
         )
 
     folder_path = _make_unique_folder(base_path)
@@ -214,7 +270,7 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path, outlook)
+    _save_as_msg(email["id"], folder_path, outlook, email.get("store_id"))
     _save_as_pdf(email, folder_path)
 
     attachment_results = []
@@ -239,6 +295,8 @@ def save_email(email, project_folder_name, contact_label, topic_label, output_ro
         "subject": email["subject"], "timestamp": email["timestamp"].isoformat(),
         "project_folder": project_folder_name,
         "address_folder": address_folder_name,
+        "company_only": bool(company_only),
+        "existing_company": bool(is_existing_company),
         "contact_label": contact_label,
         "topic_label": topic_label,
         "attachments": attachment_results,
@@ -266,7 +324,7 @@ def save_department_email(email, department_folder_name, output_root, outlook=No
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path, outlook)
+    _save_as_msg(email["id"], folder_path, outlook, email.get("store_id"))
     _save_as_pdf(email, folder_path)
 
 
@@ -319,7 +377,7 @@ def save_plenergy_fallback_email(email, output_root, folder_label, outlook=None)
     with open(os.path.join(folder_path, "email.txt"), "w", encoding="utf-8") as f:
         f.write(text_content)
 
-    _save_as_msg(email["id"], folder_path, outlook)
+    _save_as_msg(email["id"], folder_path, outlook, email.get("store_id"))
     _save_as_pdf(email, folder_path)
 
     attachment_results = []

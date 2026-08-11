@@ -49,7 +49,7 @@ class PostFilingResult(BaseModel):
 class ProjectMatchResult(BaseModel):
     is_relevant: bool  # true = real project correspondence or official bank/government mail worth filing; false = everything else -- left untouched, staff handle it manually
     matched_existing: bool
-    project_folder_name: str
+    project_folder_name: str  # v1.18: matched/proposed top-level COMPANY folder name
     contact_label: str   # e.g. "E.BOSCH" or "DAVID REYERO (REYQUEDA)"
     topic_label: str
     mentions_specific_address: bool  # true if THIS email names a specific site/address/location
@@ -58,7 +58,7 @@ class ProjectMatchResult(BaseModel):
 
 class AddressMatchResult(BaseModel):
     matched_existing: bool
-    address_folder_name: str   # bare name, no code prefix -- e.g. "CAMÍ DE FAITANAR 2 - PICAÑA"
+    address_folder_name: str   # v1.18: matched/proposed PROJECT/SITE folder inside the company
 
 
 class BillingMatchResult(BaseModel):

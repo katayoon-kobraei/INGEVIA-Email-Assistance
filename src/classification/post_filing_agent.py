@@ -29,3 +29,44 @@ def classify_post_filing(email):
         ),
     )
     return PostFilingResult.model_validate_json(response.text)
+
+def fallback_post_filing_result(email):
+    """Return a conservative local result when the secondary AI call fails.
+
+    This guarantees that every filed email still receives a 1-5 priority and
+    therefore a UI color. It does not replace Gemini during normal operation.
+    """
+    from types import SimpleNamespace
+    text = f"{email.get('subject', '')} {email.get('body', '')}".casefold()
+    critical_terms = (
+        "urgente", "urgent", "hoy", "today", "inmediato", "immediate",
+        "emergencia", "emergency", "accidente", "safety", "seguridad",
+        "bloqueado", "blocked", "parado", "stopped",
+    )
+    high_terms = (
+        "plazo", "deadline", "vence", "vencimiento", "as soon as possible",
+        "cuanto antes", "necesitamos", "se requiere", "required", "reclamación",
+        "complaint", "legal", "contrato", "contract",
+    )
+    action_terms = (
+        "por favor", "please", "puedes", "podéis", "necesito", "adjuntar",
+        "enviar", "confirmar", "revisar", "respuesta", "reply", "confirm",
+        "send", "review", "?",
+    )
+
+    if any(term in text for term in critical_terms):
+        priority = 5
+    elif any(term in text for term in high_terms):
+        priority = 4
+    elif any(term in text for term in action_terms):
+        priority = 3
+    elif email.get("direction") == "SALIENTE":
+        priority = 2
+    else:
+        priority = 2
+
+    needs_response = (
+        email.get("direction") == "ENTRANTE"
+        and any(term in text for term in action_terms)
+    )
+    return SimpleNamespace(priority=priority, needs_response=needs_response)

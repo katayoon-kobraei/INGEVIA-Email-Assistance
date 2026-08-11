@@ -11,10 +11,10 @@ import win32com.client
 OL_FLAG_MARKED = 2
 
 
-def _try_flag_once(entry_id, category, outlook=None):
+def _try_flag_once(entry_id, category, outlook=None, store_id=None):
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    item = outlook.GetItemFromID(entry_id)
+    item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
 
     item.FlagStatus = OL_FLAG_MARKED
 
@@ -30,7 +30,7 @@ def _try_flag_once(entry_id, category, outlook=None):
     item.Save()
 
 
-def mark_email_processed(entry_id, category=None, outlook=None):
+def mark_email_processed(entry_id, category=None, outlook=None, store_id=None):
     """Re-fetches the item by its EntryID -- works no matter which
     function originally read the email -- and stamps it with a red
     follow-up flag (reliable on IMAP and Exchange alike), plus a
@@ -48,14 +48,14 @@ def mark_email_processed(entry_id, category=None, outlook=None):
     Outlook's "resources exhausted" errors under long-running,
     frequent automation). If not given, connects fresh."""
     try:
-        _try_flag_once(entry_id, category, outlook)
+        _try_flag_once(entry_id, category, outlook, store_id)
         return True
     except Exception:
         pass  # first attempt failed -- likely a transient sync conflict, retry once
 
     time.sleep(1)
     try:
-        _try_flag_once(entry_id, category, outlook)
+        _try_flag_once(entry_id, category, outlook, store_id)
         return True
     except Exception as e:
         print(f"Could not flag email {entry_id} in Outlook: {e}")

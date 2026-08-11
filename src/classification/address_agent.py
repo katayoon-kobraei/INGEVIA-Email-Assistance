@@ -24,7 +24,7 @@ def classify_address(email, existing_addresses, company_folder_name=None):
     addresses_list = "\n".join(candidates) if candidates else "(none yet)"
     contact = email.get("sender") or email.get("recipient")
     prompt = (
-        f"{ADDRESS_RUBRIC}\n\nExisting address folders for this company:\n{addresses_list}\n\n"
+        f"{ADDRESS_RUBRIC}\n\nExisting project/site folders for this company:\n{addresses_list}\n\n"
         f"Direction: {email['direction']}\nEmail subject: {email['subject']}\nContact: {contact}\n\n{email['body']}"
     )
     response = generate_content_with_retry(

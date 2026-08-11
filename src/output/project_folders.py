@@ -88,6 +88,43 @@ def _distinct_holding_pen_projects(pen_path):
     return names
 
 
+
+def list_existing_companies(output_root, year):
+    """Return the real top-level company/client folders for one TRABAJOS year.
+
+    The holding pen (``YY-000 MAILS``) and ``UNSORTED`` are operational
+    buckets, not companies, so they are never offered to the company matcher.
+    This is intentionally filesystem-driven: the AI may only select a company
+    that actually exists on the server.
+    """
+    trabajos_folder = os.path.join(output_root, f"TRABAJOS {year}")
+    if not os.path.isdir(trabajos_folder):
+        return []
+
+    excluded = {get_holding_pen_name(year), *RESERVED_TOP_LEVEL_NAMES}
+    return sorted(
+        name for name in os.listdir(trabajos_folder)
+        if name not in excluded
+        and not name.startswith(".")
+        and os.path.isdir(os.path.join(trabajos_folder, name))
+    )
+
+
+def exact_existing_name(candidate, existing_names):
+    """Resolve an AI-returned folder name against a real candidate list.
+
+    Matching is case-insensitive but otherwise exact. This prevents a model
+    hallucination or slightly rewritten name from ever creating a fake company
+    or project folder. Returns the real on-disk name, or ``None``.
+    """
+    target = str(candidate or "").strip().casefold()
+    if not target:
+        return None
+    for name in existing_names:
+        if str(name).strip().casefold() == target:
+            return name
+    return None
+
 def list_existing_projects(output_root, years):
     """Flat list of matchable candidate names for the given year(s):
     real top-level project folders, plus every distinct not-yet-formal

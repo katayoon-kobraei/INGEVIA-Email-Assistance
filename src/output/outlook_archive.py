@@ -15,6 +15,8 @@ import time
 
 import win32com.client
 
+from src.outlook_mailbox import get_target_folder
+
 INBOX_FOLDER_ID = 6
 
 
@@ -22,7 +24,7 @@ def _get_or_create_top_level_folder(outlook, folder_name):
     """Looks for folder_name as a top-level folder at the account root
     (a sibling of Inbox, Sent Items, etc.), not nested inside Inbox --
     this is where Outlook's own built-in Archive button puts things."""
-    inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
+    inbox = get_target_folder(outlook, INBOX_FOLDER_ID)
     store_root = inbox.Parent
     for f in store_root.Folders:
         if f.Name == folder_name:
@@ -30,15 +32,15 @@ def _get_or_create_top_level_folder(outlook, folder_name):
     return store_root.Folders.Add(folder_name)
 
 
-def _try_archive_top_level_once(entry_id, folder_name, outlook=None):
+def _try_archive_top_level_once(entry_id, folder_name, outlook=None, store_id=None):
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    item = outlook.GetItemFromID(entry_id)
+    item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
     archive_folder = _get_or_create_top_level_folder(outlook, folder_name)
     item.Move(archive_folder)
 
 
-def archive_to_top_level(entry_id, folder_name, outlook=None):
+def archive_to_top_level(entry_id, folder_name, outlook=None, store_id=None):
     """Same retry behavior as archive_email, but moves into a
     top-level folder (a sibling of Inbox) instead of a subfolder
     nested inside it -- used for junk mail, so it lands in Outlook's
@@ -47,13 +49,13 @@ def archive_to_top_level(entry_id, folder_name, outlook=None):
     outlook: an already-open MAPI namespace to reuse -- see
     mark_email_processed in outlook_flag.py for why this matters."""
     try:
-        _try_archive_top_level_once(entry_id, folder_name, outlook)
+        _try_archive_top_level_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception:
         pass
     time.sleep(1)
     try:
-        _try_archive_top_level_once(entry_id, folder_name, outlook)
+        _try_archive_top_level_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception as e:
         print(f"Could not archive email {entry_id} to top-level folder in Outlook: {e}")
@@ -67,16 +69,16 @@ def _get_or_create_archive_folder(inbox, folder_name):
     return inbox.Folders.Add(folder_name)
 
 
-def _try_copy_once(entry_id, folder_name, outlook=None):
+def _try_copy_once(entry_id, folder_name, outlook=None, store_id=None):
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
-    item = outlook.GetItemFromID(entry_id)
+    inbox = get_target_folder(outlook, INBOX_FOLDER_ID)
+    item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
     target_folder = _get_or_create_archive_folder(inbox, folder_name)
     copied_item = item.Copy()
     copied_item.Move(target_folder)
 
-def copy_email(entry_id, folder_name, outlook=None):
+def copy_email(entry_id, folder_name, outlook=None, store_id=None):
     """Same idea as archive_email, but leaves the original where it is
     -- puts a COPY in folder_name instead of moving the original out
     of the Inbox. Used for pending-response emails, which should stay
@@ -85,29 +87,29 @@ def copy_email(entry_id, folder_name, outlook=None):
     outlook: an already-open MAPI namespace to reuse -- see
     mark_email_processed in outlook_flag.py for why this matters."""
     try:
-        _try_copy_once(entry_id, folder_name, outlook)
+        _try_copy_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception:
         pass
     time.sleep(1)
     try:
-        _try_copy_once(entry_id, folder_name, outlook)
+        _try_copy_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception as e:
         print(f"Could not copy email {entry_id} in Outlook: {e}")
         return False
 
 
-def _try_archive_once(entry_id, folder_name, outlook=None):
+def _try_archive_once(entry_id, folder_name, outlook=None, store_id=None):
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    inbox = outlook.GetDefaultFolder(INBOX_FOLDER_ID)
-    item = outlook.GetItemFromID(entry_id)
+    inbox = get_target_folder(outlook, INBOX_FOLDER_ID)
+    item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
     archive_folder = _get_or_create_archive_folder(inbox, folder_name)
     item.Move(archive_folder)
 
 
-def archive_email(entry_id, folder_name, outlook=None):
+def archive_email(entry_id, folder_name, outlook=None, store_id=None):
     """Re-fetches the item by EntryID and moves it into <folder_name>
     under the Inbox. Retries once after a short pause if the first
     attempt hits Outlook's "message was modified" conflict -- the
@@ -119,14 +121,14 @@ def archive_email(entry_id, folder_name, outlook=None):
     outlook: an already-open MAPI namespace to reuse -- see
     mark_email_processed in outlook_flag.py for why this matters."""
     try:
-        _try_archive_once(entry_id, folder_name, outlook)
+        _try_archive_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception:
         pass  # first attempt failed -- likely a transient conflict, retry once
 
     time.sleep(1)
     try:
-        _try_archive_once(entry_id, folder_name, outlook)
+        _try_archive_once(entry_id, folder_name, outlook, store_id)
         return True
     except Exception as e:
         print(f"Could not archive email {entry_id} in Outlook: {e}")
