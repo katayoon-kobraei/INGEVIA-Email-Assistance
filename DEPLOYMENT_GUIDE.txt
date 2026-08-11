@@ -1,0 +1,69 @@
+INGEVIA EMAIL AI ASSISTANT v1.18 - ENGINEERING TEAM DEPLOYMENT
+==============================================================
+
+ARCHITECTURE
+------------
+Boss Outlook -> ONE Processing PC -> shared app data + P:\TRABAJOS 2026
+                                      |
+                                      +-> Engineer Viewer PCs
+
+STORAGE
+-------
+A. Shared app state/UI:
+       P:\Email Assistant Data
+   (or UNC equivalent)
+
+B. Real engineering archive:
+       P:\TRABAJOS 2026
+
+Do not use Email Assistant Data\TRABAJOS 2026 as the archive.
+
+ROUTING FOR NEW EMAILS - BOTH DIRECTIONS
+-----------------------------------------
+1. Company exists + project exists + incoming:
+       TRABAJOS 2026\Company\Project\03.-CORREO\ENTRANTE\Email Folder
+
+2. Company exists + project exists + outgoing:
+       TRABAJOS 2026\Company\Project\03.-CORREO\SALIENTE\Email Folder
+
+3. Company exists + project does NOT exist (incoming OR outgoing):
+       TRABAJOS 2026\26-000 MAILS\Email Folder
+
+4. Company does NOT exist (incoming OR outgoing):
+       TRABAJOS 2026\26-000 MAILS\Email Folder
+
+No company or project folder is created automatically when a real match is not
+found.
+
+Email-folder naming:
+       YY-MM-DD Contact_Name Subject Company
+
+For ENTRANTE, Contact_Name is the sender. For SALIENTE, it is the recipient.
+
+PROCESSOR INSTALLATION
+----------------------
+1. Close the old app.
+2. Run INSTALL_AS_PROCESSING_COMPUTER.bat.
+3. Enter the shared Email Assistant Data folder.
+4. For "TRABAJOS 2026 folder", enter:
+       P:\TRABAJOS 2026
+   or its UNC equivalent.
+5. Enter the boss Outlook mailbox.
+6. Test one incoming and one outgoing email against a known project.
+7. Confirm they appear under ENTRANTE and SALIENTE respectively.
+
+VIEWER INSTALLATION
+-------------------
+1. Run INSTALL_AS_VIEWER_COMPUTER.bat.
+2. Enter the same shared Email Assistant Data folder.
+3. Enter the same P:\TRABAJOS 2026 path (or UNC equivalent).
+4. Confirm the engineer can open that archive in File Explorer.
+5. Open the app and double-click an email to verify its real folder opens.
+
+NOTES
+-----
+- Only one PC should be PROCESSOR.
+- All engineer PCs should be VIEWER.
+- If P: is not mapped identically on every PC, use the exact UNC path.
+- v1.18 does not move/rename previously archived emails; it changes/protects
+  routing for newly processed mail.
