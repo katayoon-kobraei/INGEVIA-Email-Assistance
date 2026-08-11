@@ -5,6 +5,24 @@ import re
 RESERVED_TOP_LEVEL_NAMES = {"UNSORTED"}
 
 
+def find_correo_folder(path):
+    """Returns the name of the correspondence folder directly under
+    `path`, if one exists -- any immediate subfolder whose name
+    contains "CORREO" (exact capitalization), regardless of its
+    numbering prefix. Different companies on the server use different
+    conventions ("03.-CORREO", "2. CORREO", "CORREO", ...), so this
+    matches by substring rather than assuming a fixed "03.-CORREO"
+    name. Returns None if `path` doesn't exist or has no such
+    subfolder. If more than one matches (shouldn't normally happen),
+    returns the first in directory-listing order."""
+    if not os.path.isdir(path):
+        return None
+    for name in os.listdir(path):
+        if "CORREO" in name and os.path.isdir(os.path.join(path, name)):
+            return name
+    return None
+
+
 def company_uses_address_subfolders(output_root, company_year, company_folder_name):
     """Deterministically decides whether THIS company already uses
     address-level subfoldering, by looking at its real folder
@@ -15,10 +33,12 @@ def company_uses_address_subfolders(output_root, company_year, company_folder_na
       True  -- company already has one or more address-coded
                subfolders (e.g. '26-003-01 ...'). classify_address
                MUST run, regardless of this email's own content.
-      False -- company already has "03.-CORREO" directly under it
-               (single-site). classify_address must NOT run for it.
+      False -- company already has a correspondence folder (any name
+               containing "CORREO", e.g. "03.-CORREO" or "2. CORREO")
+               directly under it (single-site). classify_address must
+               NOT run for it.
       None  -- company folder doesn't exist yet, or exists but has
-               neither "03.-CORREO" nor any address subfolder yet
+               neither a CORREO folder nor any address subfolder yet
                (brand new). Ambiguous -- caller should fall back to
                the email's own content (mentions_specific_address)
                to decide how to set this company up for the first time.
@@ -27,7 +47,7 @@ def company_uses_address_subfolders(output_root, company_year, company_folder_na
     if not os.path.isdir(company_path):
         return None
 
-    if os.path.isdir(os.path.join(company_path, "03.-CORREO")):
+    if find_correo_folder(company_path):
         return False
     if list_existing_addresses(output_root, company_year, company_folder_name):
         return True
@@ -272,12 +292,14 @@ def list_existing_addresses(output_root, company_year, company_folder_name):
             if os.path.isdir(os.path.join(company_path, name)) and pattern.match(name)
         )
     # Holding-pen company: no code sequence exists yet, so address
-    # subfolders are just bare names. "03.-CORREO" itself lives
-    # directly under the company folder for emails with no specific
-    # site, so it must be excluded from the address candidate list.
+    # subfolders are just bare names. The correspondence folder itself
+    # (any name containing "CORREO", e.g. "03.-CORREO" or "2. CORREO")
+    # lives directly under the company folder for emails with no
+    # specific site, so it must be excluded from the address candidate
+    # list.
     return sorted(
         name for name in os.listdir(company_path)
-        if os.path.isdir(os.path.join(company_path, name)) and name != "03.-CORREO"
+        if os.path.isdir(os.path.join(company_path, name)) and "CORREO" not in name
     )
 
 

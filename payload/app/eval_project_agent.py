@@ -62,10 +62,12 @@ def find_project_folders(trabajos_root):
 
 
 def find_correo_folders(trabajos_root):
-    """Recursively find every '03.-CORREO' folder, at any nesting
-    depth, and report which top-level project folder it belongs to."""
+    """Recursively find every correspondence folder (any folder name
+    containing "CORREO", e.g. "03.-CORREO", "2. CORREO" -- numbering
+    isn't consistent project to project), at any nesting depth, and
+    report which top-level project folder it belongs to."""
     for dirpath, dirnames, _ in os.walk(trabajos_root):
-        if os.path.basename(dirpath) == "03.-CORREO":
+        if "CORREO" in os.path.basename(dirpath):
             rel = os.path.relpath(dirpath, trabajos_root)
             top_level_project = rel.split(os.sep)[0]
             yield top_level_project, dirpath

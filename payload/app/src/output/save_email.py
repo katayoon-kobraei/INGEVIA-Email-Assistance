@@ -13,6 +13,7 @@ from src.output.project_folders import (
     is_formal_project_code,
     RESERVED_TOP_LEVEL_NAMES,
     get_company_path,
+    find_correo_folder,
 )
 
 import win32com.client
@@ -202,8 +203,11 @@ def save_email(
 
     v1.18 routing (same validation for incoming and outgoing):
       * existing company + existing project/site ->
-        COMPANY / PROJECT / 03.-CORREO / ENTRANTE / EMAIL_FOLDER  (incoming)
-        COMPANY / PROJECT / 03.-CORREO / SALIENTE / EMAIL_FOLDER  (outgoing)
+        COMPANY / PROJECT / <CORREO folder> / ENTRANTE / EMAIL_FOLDER  (incoming)
+        COMPANY / PROJECT / <CORREO folder> / SALIENTE / EMAIL_FOLDER  (outgoing)
+        <CORREO folder> is whichever existing subfolder name contains "CORREO"
+        (e.g. "03.-CORREO", "2. CORREO") -- new projects with none yet default
+        to "03.-CORREO". See find_correo_folder() in project_folders.py.
       * existing company but no matching project/site ->
         YY-000 MAILS / EMAIL_FOLDER
       * company not found ->
@@ -240,13 +244,19 @@ def save_email(
             )
         else:
             # A real existing project/site matched. Save beneath that project's
-            # existing 03.-CORREO direction structure.
+            # existing correspondence folder. Different projects on the server
+            # use different numbering for this folder (e.g. "03.-CORREO",
+            # "2. CORREO") -- find whichever one already exists here by name
+            # (any folder containing "CORREO"), rather than assuming a fixed
+            # "03.-CORREO" name. Only a brand-new project/site with no
+            # correspondence folder yet falls back to creating "03.-CORREO".
             destination = company_path
             if address_folder_name:
                 destination = os.path.join(destination, address_folder_name)
+            correo_folder_name = find_correo_folder(destination) or "03.-CORREO"
             base_path = os.path.join(
                 destination,
-                "03.-CORREO",
+                correo_folder_name,
                 direction_folder,
                 email_folder_name,
             )
