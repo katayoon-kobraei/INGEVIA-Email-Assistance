@@ -36,6 +36,7 @@ from src.output.project_folders import (
     get_project_year,
     get_holding_pen_name,
     exact_existing_name,
+    company_uses_address_subfolders,
 )
 from src.classification.post_filing_agent import classify_post_filing, fallback_post_filing_result
 from src.classification.project_agent import classify_project
@@ -452,11 +453,31 @@ def run():
                             address_folder_name = None
                             company_only = True
                     else:
-                        # The company exists, but there is no existing project/site
-                        # to match. Do not treat a direct company CORREO folder as a
-                        # project match: route to 26-000 MAILS for manual review.
-                        address_folder_name = None
-                        company_only = True
+                        # No address-coded subfolders exist for this company at
+                        # all. That's ambiguous on its own -- it could mean a
+                        # genuine single-site client (its own
+                        # COMPANY/<CORREO folder> already receives mail
+                        # directly; there's no separate site to match) or a
+                        # brand-new company folder with nothing filed under it
+                        # yet. company_uses_address_subfolders() tells these
+                        # apart using the REAL on-disk structure, never the
+                        # model's judgment -- see its docstring in
+                        # project_folders.py.
+                        if company_uses_address_subfolders(
+                            ARCHIVE_ROOT, company_year, project_folder_name
+                        ) is False:
+                            # Single-site company: file straight into its own
+                            # correspondence folder. No project/site to
+                            # invent -- the company itself already exists.
+                            address_folder_name = None
+                            company_only = False
+                        else:
+                            # Brand new company folder with no correspondence
+                            # folder yet either. Do not invent a project.
+                            # Route to the year's 26-000 MAILS holding pen for
+                            # manual review.
+                            address_folder_name = None
+                            company_only = True
                 else:
                     # Company itself was not found on the server. The proposed
                     # company name is used only in the descriptive email-folder

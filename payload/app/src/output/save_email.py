@@ -188,18 +188,22 @@ def _make_unique_folder(base_path):
     return folder_path
 
 
-def save_email(
+def resolve_save_destination(
     email,
     project_folder_name,
     contact_label,
-    topic_label,
     output_root,
     address_folder_name=None,
-    outlook=None,
     company_only=False,
     existing_company=None,
 ):
-    """Save one project/client email according to the office routing rules.
+    """Compute the exact folder path a project/client email should be saved
+    to, per the office routing rules -- pure path logic, no filesystem
+    writes. This is the single source of truth for where an email belongs,
+    shared by save_email() (which writes fresh content there) and
+    reprocess_unsorted.py (which instead MOVES an already-saved entry
+    there without touching Outlook) -- kept in exactly one place so the
+    two can never drift apart.
 
     v1.18 routing (same validation for incoming and outgoing):
       * existing company + existing project/site ->
@@ -236,42 +240,68 @@ def save_email(
             # project/site matched this email. Boss requirement: do NOT create
             # a new project and do NOT save in the company root. Put the same
             # descriptive email folder in the year's 26-000 MAILS holding pen.
-            base_path = os.path.join(
+            return os.path.join(
                 output_root,
                 f"TRABAJOS {email_year}",
                 get_holding_pen_name(email_year),
                 email_folder_name,
             )
-        else:
-            # A real existing project/site matched. Save beneath that project's
-            # existing correspondence folder. Different projects on the server
-            # use different numbering for this folder (e.g. "03.-CORREO",
-            # "2. CORREO") -- find whichever one already exists here by name
-            # (any folder containing "CORREO"), rather than assuming a fixed
-            # "03.-CORREO" name. Only a brand-new project/site with no
-            # correspondence folder yet falls back to creating "03.-CORREO".
-            destination = company_path
-            if address_folder_name:
-                destination = os.path.join(destination, address_folder_name)
-            correo_folder_name = find_correo_folder(destination) or "03.-CORREO"
-            base_path = os.path.join(
-                destination,
-                correo_folder_name,
-                direction_folder,
-                email_folder_name,
-            )
-    else:
-        # No existing top-level company was found. Never invent a company or
-        # project folder in the real archive; put the email directly into the
-        # year's holding pen using the same human-readable naming convention.
-        base_path = os.path.join(
-            output_root,
-            f"TRABAJOS {email_year}",
-            get_holding_pen_name(email_year),
+
+        # A real existing project/site matched. Save beneath that project's
+        # existing correspondence folder. Different projects on the server
+        # use different numbering for this folder (e.g. "03.-CORREO",
+        # "2. CORREO") -- find whichever one already exists here by name
+        # (any folder containing "CORREO"), rather than assuming a fixed
+        # "03.-CORREO" name. Only a brand-new project/site with no
+        # correspondence folder yet falls back to creating "03.-CORREO".
+        destination = company_path
+        if address_folder_name:
+            destination = os.path.join(destination, address_folder_name)
+        correo_folder_name = find_correo_folder(destination) or "03.-CORREO"
+        return os.path.join(
+            destination,
+            correo_folder_name,
+            direction_folder,
             email_folder_name,
         )
 
+    # No existing top-level company was found. Never invent a company or
+    # project folder in the real archive; put the email directly into the
+    # year's holding pen using the same human-readable naming convention.
+    return os.path.join(
+        output_root,
+        f"TRABAJOS {email_year}",
+        get_holding_pen_name(email_year),
+        email_folder_name,
+    )
+
+
+def save_email(
+    email,
+    project_folder_name,
+    contact_label,
+    topic_label,
+    output_root,
+    address_folder_name=None,
+    outlook=None,
+    company_only=False,
+    existing_company=None,
+):
+    """Save one project/client email according to the office routing rules.
+    See resolve_save_destination() for the actual routing/path logic.
+    """
+    base_path = resolve_save_destination(
+        email, project_folder_name, contact_label, output_root,
+        address_folder_name, company_only, existing_company,
+    )
     folder_path = _make_unique_folder(base_path)
+
+    # Same derivation resolve_save_destination() uses internally to decide
+    # is_existing_company -- recomputed here (cheap, one line) only because
+    # the metadata below needs to record it; the actual routing decision
+    # itself lives in exactly one place, resolve_save_destination().
+    is_formal = is_formal_project_code(project_folder_name) or project_folder_name in RESERVED_TOP_LEVEL_NAMES
+    is_existing_company = is_formal if existing_company is None else bool(existing_company)
 
     text_content = (
         (f"From: {email['sender']}\n" if email["direction"] == "ENTRANTE" else f"To: {email['recipient']}\n")
