@@ -97,6 +97,18 @@ DESCRIPTIONS_XLSX_PATH = os.environ.get("DESCRIPTIONS_XLSX_PATH") or ""
 # spreadsheet holds. Cut at a sentence boundary when possible.
 DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS") or "220")
 
+# Folder holding every classification agent's editable prompt file
+# (project_prompt.md, address_prompt.md, billing_prompt.md,
+# department_prompt.md, plenergy_address_prompt.md,
+# post_filing_prompt.md). Defaults to this app's own src/prompts
+# folder -- every agent below builds its own PROMPT_PATH from this
+# single constant, so the desktop app's "Edit AI prompts" screen
+# (see desktop_app/prompt_editor.py) always edits the exact files the
+# pipeline actually reads, never a copy that silently falls out of
+# sync. Only override this in .env if you specifically want prompts
+# served from somewhere else.
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR") or str(APP_ROOT / "src" / "prompts"))
+
 BOSS_EMAIL = os.environ.get("BOSS_EMAIL") or "m.vera@ingevia.com"
 
 # Outlook mailbox explicitly selected by processor installations. This avoids

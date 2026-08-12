@@ -1409,8 +1409,12 @@ class SettingsPage(QWidget):
         open_env = QPushButton("Abrir archivo .env")
         open_env.setObjectName("SecondaryButton")
         open_env.clicked.connect(self._open_env)
+        edit_prompts = QPushButton("Editar prompts de IA")
+        edit_prompts.setObjectName("SecondaryButton")
+        edit_prompts.clicked.connect(self._edit_prompts)
         actions.addWidget(open_output)
         actions.addWidget(open_env)
+        actions.addWidget(edit_prompts)
         actions.addStretch()
         outer.addLayout(actions)
         outer.addStretch()
@@ -1438,6 +1442,12 @@ class SettingsPage(QWidget):
         ok, message = data_service.open_path(data_service.ENV_PATH)
         if not ok:
             QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _edit_prompts(self) -> None:
+        from desktop_app.prompt_editor import PromptEditorDialog
+
+        dialog = PromptEditorDialog(self, language="es")
+        dialog.exec()
 
 
 class MainWindow(QMainWindow):

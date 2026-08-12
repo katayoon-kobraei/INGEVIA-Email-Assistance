@@ -6,6 +6,7 @@ from email.utils import parseaddr
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +48,21 @@ PLENERGY_SENDER_DOMAINS = os.environ.get("PLENERGY_SENDER_DOMAINS") or "plenergy
 TASK_NAME = "INGEVIA Email AI Assistant"
 MAIL_ITEM_CLASS = 43
 
+# Same folder src/config.py's PROMPTS_DIR resolves to -- kept as an
+# independent constant here (like PROJECT_YEAR_ROOT above) rather than
+# importing src.config, since the desktop app must stay usable on a
+# VIEWER install that never installs the Outlook/Gemini dependencies
+# that package pulls in.
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR") or str(PROJECT_ROOT / "src" / "prompts"))
+PROMPT_FILES = [
+    "project_prompt.md",
+    "address_prompt.md",
+    "plenergy_address_prompt.md",
+    "billing_prompt.md",
+    "department_prompt.md",
+    "post_filing_prompt.md",
+]
+
 PROCESSED_IDS_PATH = OUTPUT_ROOT / "_processed_ids.json"
 PENDING_LIST_PATH = OUTPUT_ROOT / "pendientes.csv"
 PRIORITY_LIST_PATH = OUTPUT_ROOT / "priorities.csv"
@@ -66,6 +82,43 @@ def _hidden_process_options() -> dict[str, Any]:
         "startupinfo": startupinfo,
         "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
     }
+
+
+def list_prompt_files() -> list[Path]:
+    """Every editable AI prompt file, in a fixed, sensible order (not
+    alphabetical). Falls back to whatever .md files actually exist in
+    PROMPTS_DIR if that doesn't match the expected set -- so a renamed
+    or newly-added prompt file still shows up instead of silently
+    disappearing from the editor."""
+    if not PROMPTS_DIR.is_dir():
+        return []
+    ordered = [PROMPTS_DIR / name for name in PROMPT_FILES if (PROMPTS_DIR / name).is_file()]
+    known = {p.name for p in ordered}
+    extra = sorted(p for p in PROMPTS_DIR.glob("*.md") if p.name not in known)
+    return ordered + extra
+
+
+def read_prompt_file(path: Path) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def write_prompt_file(path: Path, content: str) -> tuple[bool, str]:
+    """Saves new prompt content. Keeps a timestamped backup of the
+    previous version first, under PROMPTS_DIR/_backups, so an
+    accidental bad edit is always recoverable -- these files directly
+    control how Gemini classifies and files every email. Returns
+    (True, "") on success or (False, error_message) on failure."""
+    path = Path(path)
+    try:
+        if path.is_file():
+            backup_dir = PROMPTS_DIR / "_backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copy2(path, backup_dir / f"{path.stem}.{stamp}{path.suffix}")
+        path.write_text(content, encoding="utf-8")
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
 
 
 @dataclass(slots=True)

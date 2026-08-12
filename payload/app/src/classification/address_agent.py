@@ -1,15 +1,17 @@
-from pathlib import Path
 from google.genai import types
 from src.gemini_client import generate_content_with_retry
 from src.classification.schemas import AddressMatchResult
 from src.classification.project_descriptions import enrich_candidate_list, get_address_description
-from src.config import GEMINI_MODEL
+from src.config import GEMINI_MODEL, PROMPTS_DIR
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "address_prompt.md"
-ADDRESS_RUBRIC = PROMPT_PATH.read_text(encoding="utf-8")
+PROMPT_PATH = PROMPTS_DIR / "address_prompt.md"
 
 
 def classify_address(email, existing_addresses, company_folder_name=None):
+    # Read fresh on every call -- see the matching comment in
+    # project_agent.py for why (lets an "Edit AI prompts" save take
+    # effect immediately, even mid-session in the desktop app).
+    address_rubric = PROMPT_PATH.read_text(encoding="utf-8")
     # Attaches each address candidate's site-level description (from
     # the boss's reference spreadsheet, column F) when one exists --
     # company_folder_name is needed to look those up, since
@@ -24,7 +26,7 @@ def classify_address(email, existing_addresses, company_folder_name=None):
     addresses_list = "\n".join(candidates) if candidates else "(none yet)"
     contact = email.get("sender") or email.get("recipient")
     prompt = (
-        f"{ADDRESS_RUBRIC}\n\nExisting project/site folders for this company:\n{addresses_list}\n\n"
+        f"{address_rubric}\n\nExisting project/site folders for this company:\n{addresses_list}\n\n"
         f"Direction: {email['direction']}\nEmail subject: {email['subject']}\nContact: {contact}\n\n{email['body']}"
     )
     response = generate_content_with_retry(

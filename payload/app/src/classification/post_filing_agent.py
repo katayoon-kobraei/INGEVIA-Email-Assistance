@@ -1,13 +1,10 @@
-from pathlib import Path
-
 from google.genai import types
 
 from src.gemini_client import generate_content_with_retry
 from src.classification.schemas import PostFilingResult
-from src.config import GEMINI_MODEL
+from src.config import GEMINI_MODEL, PROMPTS_DIR
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "post_filing_prompt.md"
-POST_FILING_RUBRIC = PROMPT_PATH.read_text(encoding="utf-8")
+PROMPT_PATH = PROMPTS_DIR / "post_filing_prompt.md"
 
 
 def classify_post_filing(email):
@@ -15,9 +12,12 @@ def classify_post_filing(email):
     score into ONE call -- both are cheap, informational-only checks
     that run after filing and need nothing but the email itself, so
     there's no reason to pay for the email body twice."""
+    # Read fresh on every call -- see the matching comment in
+    # project_agent.py for why.
+    post_filing_rubric = PROMPT_PATH.read_text(encoding="utf-8")
     contact = email.get("sender") or email.get("recipient")
     prompt = (
-        f"{POST_FILING_RUBRIC}\n\n"
+        f"{post_filing_rubric}\n\n"
         f"Direction: {email['direction']}\nEmail subject: {email['subject']}\nContact: {contact}\n\n{email['body']}"
     )
     response = generate_content_with_retry(
