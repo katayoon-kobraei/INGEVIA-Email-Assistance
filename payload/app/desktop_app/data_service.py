@@ -38,6 +38,7 @@ CHECK_PENDING_RESPONSES = (os.environ.get("CHECK_PENDING_RESPONSES") or "true").
 PENDING_FOLDER_NAME = os.environ.get("PENDING_FOLDER_NAME") or "PENDIENTE DE RESPUESTA"
 DESCRIPTIONS_XLSX_PATH = Path(os.environ.get("DESCRIPTIONS_XLSX_PATH") or "") if os.environ.get("DESCRIPTIONS_XLSX_PATH") else None
 DESCRIPTION_MAX_CHARS = int(os.environ.get("DESCRIPTION_MAX_CHARS") or "220")
+CURRENT_YEAR = datetime.now().year
 BOSS_EMAIL = os.environ.get("BOSS_EMAIL") or "m.vera@ingevia.com"
 TARGET_MAILBOX = os.environ.get("TARGET_MAILBOX") or BOSS_EMAIL
 ADMINISTRACION_EMAIL = os.environ.get("ADMINISTRACION_EMAIL") or "administracion@ingevia.com"
@@ -119,6 +120,122 @@ def write_prompt_file(path: Path, content: str) -> tuple[bool, str]:
         return True, ""
     except OSError as exc:
         return False, str(exc)
+
+
+# Column order project_descriptions.py reads by POSITION (not header
+# text) from every sheet of DESCRIPTIONS_XLSX_PATH -- see that module's
+# docstring. Kept here as documentation; save_folder_data_row() below
+# writes new/updated rows in this exact order.
+FOLDER_DATA_COLUMNS = [
+    "ID proyecto",
+    "Empresa\\ Proyecto",
+    "Dirección",
+    "Año",
+    "Empresa\\ Proyecto Descripción",
+    "Subfolder Descripción",
+]
+
+
+def save_folder_data_row(
+    project_id: str,
+    company: str,
+    address: str,
+    year: Any,
+    company_description: str = "",
+    subfolder_description: str = "",
+) -> tuple[bool, str, bool]:
+    """Adds one row to DESCRIPTIONS_XLSX_PATH (Folder_Data.xlsx), the
+    reference spreadsheet project_descriptions.py reads for
+    company/site context on every classification call -- see that
+    module for how it's consumed. Changes take effect on the very next
+    email processed (that module reloads the workbook whenever its
+    mtime changes), no restart needed.
+
+    Matches an existing row by 'ID proyecto' (column A, trimmed,
+    case-insensitive) across every sheet in the workbook and updates it
+    in place instead of creating a duplicate. A brand-new ID is
+    appended to the sheet named after `year` if one exists, otherwise
+    to the workbook's last sheet (today that's the only sheet, "Trabajo
+    IA", which already mixes every year).
+
+    Returns (ok, message, was_update). Messages are bilingual (ES / EN)
+    since this module is shared by both language UI windows -- see the
+    same pattern in open_path() above.
+    """
+    import openpyxl  # local import: keeps this dependency out of every
+
+    # other desktop_app codepath that doesn't touch spreadsheets.
+
+    path = DESCRIPTIONS_XLSX_PATH
+    if not path:
+        return False, (
+            "No hay ningún archivo de descripciones configurado (DESCRIPTIONS_XLSX_PATH).\n"
+            "No description spreadsheet is configured (DESCRIPTIONS_XLSX_PATH)."
+        ), False
+    if not path.exists():
+        return False, f"No se encontró el archivo / File not found:\n{path}", False
+
+    project_id = (project_id or "").strip()
+    if not project_id:
+        return False, "Falta el ID de proyecto / Missing project ID.", False
+
+    try:
+        year_value: Any = int(str(year).strip())
+    except (TypeError, ValueError):
+        year_value = str(year).strip()
+
+    new_values = [
+        project_id,
+        (company or "").strip(),
+        (address or "").strip(),
+        year_value,
+        (company_description or "").strip(),
+        (subfolder_description or "").strip(),
+    ]
+
+    try:
+        wb = openpyxl.load_workbook(path)
+    except PermissionError:
+        return False, (
+            "No se pudo guardar: el archivo está abierto en Excel. Ciérrelo e inténtelo de nuevo.\n"
+            "Could not save: the file is open in Excel. Close it and try again."
+        ), False
+    except OSError as exc:
+        return False, str(exc), False
+
+    def _do_save() -> tuple[bool, str]:
+        try:
+            wb.save(path)
+            return True, ""
+        except PermissionError:
+            return False, (
+                "No se pudo guardar: el archivo está abierto en Excel. Ciérrelo e inténtelo de nuevo.\n"
+                "Could not save: the file is open in Excel. Close it and try again."
+            )
+        except OSError as exc:
+            return False, str(exc)
+
+    target_key = project_id.casefold()
+    for sheet in wb.worksheets:
+        for (cell,) in sheet.iter_rows(min_row=2, min_col=1, max_col=1):
+            if cell.value is None:
+                continue
+            if str(cell.value).strip().casefold() != target_key:
+                continue
+            for col_offset, value in enumerate(new_values[1:], start=2):
+                sheet.cell(row=cell.row, column=col_offset, value=value)
+            ok, error = _do_save()
+            if not ok:
+                return False, error, False
+            return True, f"Fila actualizada en la hoja «{sheet.title}». / Row updated in sheet “{sheet.title}”.", True
+
+    year_sheet_name = str(year).strip()
+    target_sheet = wb[year_sheet_name] if year_sheet_name in wb.sheetnames else wb[wb.sheetnames[-1]]
+    target_sheet.append(new_values)
+    ok, error = _do_save()
+    if not ok:
+        return False, error, False
+    return True, f"Fila añadida a la hoja «{target_sheet.title}». / Row added to sheet “{target_sheet.title}”.", False
 
 
 @dataclass(slots=True)

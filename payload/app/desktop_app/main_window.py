@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QComboBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -29,9 +31,11 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QStatusBar,
     QTableWidget,
@@ -1450,6 +1454,179 @@ class SettingsPage(QWidget):
         dialog.exec()
 
 
+class NewFoldersPage(QWidget):
+    """Página para dar de alta un proyecto/empresa o subcarpeta nueva en
+    Folder_Data.xlsx (DESCRIPTIONS_XLSX_PATH), el archivo de referencia
+    que project_descriptions.py lee para dar contexto a la IA en cada
+    clasificación. Los cambios se aplican de inmediato, sin reiniciar
+    la aplicación."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(14)
+
+        title = QLabel("Carpetas nuevas")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Añada una fila cuando se cree un proyecto, empresa o subcarpeta nueva, para que la "
+            "IA la reconozca en el próximo correo procesado."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
+
+        file_panel = QFrame()
+        file_panel.setObjectName("Panel")
+        file_layout = QVBoxLayout(file_panel)
+        file_layout.setContentsMargins(22, 20, 22, 20)
+        file_layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        icon = QLabel("XLSX")
+        icon.setObjectName("MetricIcon")
+        icon.setProperty("tone", "green")
+        icon.setFixedSize(58, 42)
+        icon.setAlignment(Qt.AlignCenter)
+        title_block = QVBoxLayout()
+        file_name = data_service.DESCRIPTIONS_XLSX_PATH.name if data_service.DESCRIPTIONS_XLSX_PATH else "No configurado"
+        file_label = QLabel(file_name)
+        file_label.setObjectName("SectionTitle")
+        title_block.addWidget(file_label)
+        header.addWidget(icon)
+        header.addLayout(title_block, 1)
+        file_layout.addLayout(header)
+
+        path_text = str(data_service.DESCRIPTIONS_XLSX_PATH) if data_service.DESCRIPTIONS_XLSX_PATH else "No configurado (DESCRIPTIONS_XLSX_PATH)"
+        add_setting_row(file_layout, "Ubicación", path_text)
+        outer.addWidget(file_panel)
+
+        open_actions = QHBoxLayout()
+        open_button = QPushButton("Abrir archivo Excel")
+        open_button.setObjectName("SecondaryButton")
+        open_button.setEnabled(bool(data_service.DESCRIPTIONS_XLSX_PATH))
+        open_button.clicked.connect(self._open_excel)
+        open_actions.addWidget(open_button)
+        open_actions.addStretch()
+        outer.addLayout(open_actions)
+
+        form_panel = QFrame()
+        form_panel.setObjectName("Panel")
+        form_outer = QVBoxLayout(form_panel)
+        form_outer.setContentsMargins(22, 20, 22, 20)
+        form_outer.setSpacing(12)
+
+        form_title = QLabel("Nueva fila")
+        form_title.setObjectName("SectionTitle")
+        form_outer.addWidget(form_title)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft)
+
+        self.project_id_input = QLineEdit()
+        self.project_id_input.setPlaceholderText("26-002-02")
+        form.addRow("ID proyecto:", self.project_id_input)
+
+        self.company_input = QLineEdit()
+        self.company_input.setPlaceholderText("CONSUM")
+        form.addRow("Empresa \\ Proyecto:", self.company_input)
+
+        self.address_input = QLineEdit()
+        self.address_input.setPlaceholderText("C DEL FORN VICENTE ROCA CERVERA, 33 XIRIVELLA")
+        form.addRow("Dirección:", self.address_input)
+
+        self.year_input = QSpinBox()
+        self.year_input.setRange(2000, 2100)
+        self.year_input.setValue(data_service.CURRENT_YEAR)
+        self.year_input.setGroupSeparatorShown(False)
+        form.addRow("Año:", self.year_input)
+
+        self.company_description_input = QPlainTextEdit()
+        self.company_description_input.setPlaceholderText("Descripción de la empresa/proyecto (opcional pero recomendado)")
+        self.company_description_input.setFixedHeight(70)
+        form.addRow("Empresa \\ Proyecto Descripción:", self.company_description_input)
+
+        self.subfolder_description_input = QPlainTextEdit()
+        self.subfolder_description_input.setPlaceholderText("Descripción de la subcarpeta, si la hay (opcional)")
+        self.subfolder_description_input.setFixedHeight(70)
+        form.addRow("Subfolder Descripción:", self.subfolder_description_input)
+
+        form_outer.addLayout(form)
+        outer.addWidget(form_panel)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("MutedText")
+        self.status_label.setWordWrap(True)
+        outer.addWidget(self.status_label)
+
+        buttons = QHBoxLayout()
+        clear_button = QPushButton("Limpiar campos")
+        clear_button.setObjectName("SecondaryButton")
+        clear_button.clicked.connect(self._clear)
+        save_button = QPushButton("Guardar fila")
+        save_button.setObjectName("PrimaryButton")
+        save_button.clicked.connect(self._save)
+        buttons.addWidget(clear_button)
+        buttons.addStretch()
+        buttons.addWidget(save_button)
+        outer.addLayout(buttons)
+        outer.addStretch()
+
+    def _open_excel(self) -> None:
+        ok, message = data_service.open_path(data_service.DESCRIPTIONS_XLSX_PATH)
+        if not ok:
+            QMessageBox.warning(self, "No se pudo abrir", message)
+
+    def _clear(self) -> None:
+        self.project_id_input.clear()
+        self.company_input.clear()
+        self.address_input.clear()
+        self.year_input.setValue(data_service.CURRENT_YEAR)
+        self.company_description_input.clear()
+        self.subfolder_description_input.clear()
+        self.status_label.setText("")
+
+    def _save(self) -> None:
+        project_id = self.project_id_input.text().strip()
+        company = self.company_input.text().strip()
+        address = self.address_input.text().strip()
+        year = self.year_input.value()
+        company_description = self.company_description_input.toPlainText().strip()
+        subfolder_description = self.subfolder_description_input.toPlainText().strip()
+
+        if not project_id or not company or not address:
+            QMessageBox.warning(
+                self,
+                "Faltan datos",
+                "Complete al menos ID proyecto, Empresa \\ Proyecto y Dirección antes de guardar.",
+            )
+            return
+
+        if not re.match(r"^\d{2}-\d+(-\d+)?$", project_id):
+            confirm = QMessageBox.question(
+                self,
+                "Formato de ID inusual",
+                f'«{project_id}» no tiene el formato habitual (ej. 26-002-02). ¿Guardar de todas formas?',
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+        ok, message = data_service.save_folder_data_row(
+            project_id, company, address, year, company_description, subfolder_description
+        )
+        if not ok:
+            QMessageBox.warning(self, "No se pudo guardar", message)
+            self.status_label.setText("")
+            return
+
+        self.status_label.setText(message.split(" / ")[0])
+        QMessageBox.information(self, "Guardado", message.split(" / ")[0])
+        self._clear()
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -1489,6 +1666,7 @@ class MainWindow(QMainWindow):
         self.excel_page = ExcelReportPage()
         self.attachments = AttachmentsPage()
         self.settings_page = SettingsPage()
+        self.new_folders_page = NewFoldersPage()
         for page in (
             self.dashboard,
             self.emails,
@@ -1498,6 +1676,7 @@ class MainWindow(QMainWindow):
             self.excel_page,
             self.attachments,
             self.settings_page,
+            self.new_folders_page,
         ):
             self.stack.addWidget(page)
         main.addWidget(self.stack, 1)
@@ -1539,6 +1718,7 @@ class MainWindow(QMainWindow):
             ("▥  Informe Excel", 5),
             ("▣  Adjuntos", 6),
             ("⚙  Configuración", 7),
+            ("🗂  Carpetas nuevas", 8),
         ]
         for text, index in buttons:
             button = QPushButton(text)
@@ -1626,6 +1806,7 @@ class MainWindow(QMainWindow):
             ("Informe Excel", "Archivo Excel generado en la carpeta de salida"),
             ("Adjuntos", "Archivos guardados y bloqueados por seguridad"),
             ("Configuración", "Estado de la aplicación local y sus rutas"),
+            ("Carpetas nuevas", "Añadir una fila nueva al archivo de referencia Folder_Data.xlsx"),
         ]
         self.stack.setCurrentIndex(index)
         self.top_title.setText(titles[index][0])
