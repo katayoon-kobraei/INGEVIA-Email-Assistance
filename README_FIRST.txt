@@ -1,9 +1,22 @@
-INGEVIA EMAIL AI ASSISTANT - PORTABLE INSTALLER v1.18
+INGEVIA EMAIL AI ASSISTANT - PORTABLE INSTALLER v1.20
 ======================================================
 
 This is the complete processor/viewer package based on the working v1.17 build.
 Everything from v1.17 is preserved. v1.18 makes the boss-approved routing rule
 explicit and identical for both incoming (ENTRANTE) and outgoing (SALIENTE) mail.
+
+
+v1.20 - OUTLOOK FLAGGED VIEW RESTORED
+--------------------------------------
+The original intended workflow is restored:
+
+    AI processes email -> red Outlook follow-up flag/category is applied
+    -> "Marcados en Outlook" shows that processed flagged email.
+
+The UI now resolves processed EntryIDs against the configured boss mailbox
+StoreID, so additional/shared Outlook stores work correctly. Incoming and
+outgoing processed emails are both included again. Automatic flag retries also
+retain StoreID after transient Outlook sync conflicts.
 
 IMPORTANT: TWO DIFFERENT STORAGE LOCATIONS
 ------------------------------------------

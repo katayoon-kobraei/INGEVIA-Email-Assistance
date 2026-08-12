@@ -65,8 +65,15 @@ def _retry_pending_flags(outlook=None):
     if not pending:
         return
     print(f"Retrying {len(pending)} email(s) whose Outlook flag failed last run...")
-    for entry_id, category in list(pending.items()):
-        if mark_email_processed(entry_id, category, outlook):
+    for entry_id, pending_value in list(pending.items()):
+        if isinstance(pending_value, dict):
+            category = pending_value.get("category") or PROCESSED_CATEGORY_NAME
+            store_id = pending_value.get("store_id") or None
+        else:
+            # Backward compatibility with old _pending_flags.json files.
+            category = pending_value or PROCESSED_CATEGORY_NAME
+            store_id = None
+        if mark_email_processed(entry_id, category, outlook, store_id):
             remove_pending_flag(OUTPUT_ROOT, entry_id)
             print(f"  Flagged on retry: {entry_id}")
 
@@ -103,7 +110,9 @@ def _mark_done(email, outlook=None):
     if ok:
         remove_pending_flag(OUTPUT_ROOT, email["id"])
     else:
-        add_pending_flag(OUTPUT_ROOT, email["id"], PROCESSED_CATEGORY_NAME)
+        add_pending_flag(
+            OUTPUT_ROOT, email["id"], PROCESSED_CATEGORY_NAME, email.get("store_id")
+        )
         print(f"  (Outlook flag failed -- will retry automatically next run)")
 
 

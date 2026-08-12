@@ -921,14 +921,58 @@ def _load_shared_processed_summary(limit: int = 250) -> OutlookFlagSummary:
     return OutlookFlagSummary(total=total, rows=rows, estimated=True)
 
 
-def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
-    """Return only Outlook messages processed by this local installation.
+def _target_mailbox_store_ids(namespace: Any) -> list[str]:
+    """Return StoreID values for the explicitly configured boss mailbox.
 
-    The local ``_processed_ids.json`` is used as the source of truth. This avoids
-    counting thousands of historical or manually flagged messages in the boss's
-    mailbox that happen to use the same Outlook category.
+    EntryID alone can fail when the mailbox is an additional/shared Outlook
+    store. The flagged-email page must therefore resolve items using the same
+    mailbox store that the processing pipeline used.
+    """
+    store_ids: list[str] = []
+    try:
+        from src.outlook_mailbox import get_target_folder
+    except Exception:
+        return store_ids
+
+    for folder_id in (6, 5):  # Inbox, Sent Items
+        try:
+            folder = get_target_folder(namespace, folder_id, TARGET_MAILBOX)
+            store_id = str(_safe_get(folder, "StoreID", "") or "").strip()
+            if store_id and store_id not in store_ids:
+                store_ids.append(store_id)
+        except Exception:
+            continue
+    return store_ids
+
+
+def _get_processed_outlook_item(namespace: Any, entry_id: str, store_ids: list[str]) -> Any:
+    """Resolve one processed Outlook item across primary/shared stores."""
+    for store_id in store_ids:
+        try:
+            return namespace.GetItemFromID(entry_id, store_id)
+        except Exception:
+            continue
+    try:
+        return namespace.GetItemFromID(entry_id)
+    except Exception:
+        return None
+
+
+def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
+    """Show AI-processed emails that are flagged/stamped in Outlook.
+
+    Restores the original workflow:
+
+        AI processes email -> Outlook follow-up flag/category is applied
+        -> Marcados en Outlook shows the processed flagged item.
+
+    Incoming and outgoing processed mail are both included. The processed-ID
+    list remains the filter so unrelated manually-flagged mailbox history is not
+    mixed into the AI Assistant view.
     """
     if IS_VIEWER:
+        # Viewer PCs intentionally do not connect to the boss Outlook mailbox.
+        # They show the shared processed-email set written by the processor.
         return _load_shared_processed_summary(limit)
 
     if os.name != "nt":
@@ -947,28 +991,27 @@ def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
     pythoncom.CoInitialize()
     try:
         namespace = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        store_ids = _target_mailbox_store_ids(namespace)
         rows: list[dict[str, Any]] = []
         total = 0
+
         for entry_id in processed_ids:
-            try:
-                item = namespace.GetItemFromID(entry_id)
-            except Exception:
+            item = _get_processed_outlook_item(namespace, entry_id, store_ids)
+            if item is None:
                 continue
             if _safe_get(item, "Class") != MAIL_ITEM_CLASS:
                 continue
-            if bool(_safe_get(item, "Sent", False)):
-                # Legacy stamped Sent Items from before outgoing mail stopped
-                # being processed. Never shown -- the app no longer processes
-                # or displays SALIENTE anywhere.
-                continue
+
             categories = _categories(item)
             flag_status = int(_safe_get(item, "FlagStatus", 0) or 0)
             is_stamped = PROCESSED_CATEGORY_NAME in categories or flag_status == 2
             if not is_stamped:
                 continue
+
             total += 1
             if len(rows) < limit:
-                rows.append(_outlook_item_row(item, "ENTRANTE"))
+                direction = "SALIENTE" if bool(_safe_get(item, "Sent", False)) else "ENTRANTE"
+                rows.append(_outlook_item_row(item, direction))
 
         rows.sort(key=lambda row: row.get("Fecha", ""), reverse=True)
         return OutlookFlagSummary(total=total, rows=rows[:limit], estimated=False)

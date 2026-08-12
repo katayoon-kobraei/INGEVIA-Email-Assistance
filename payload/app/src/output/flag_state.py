@@ -39,9 +39,17 @@ def save_pending_flags(output_root, pending):
         json.dump(pending, f, indent=2, ensure_ascii=False)
 
 
-def add_pending_flag(output_root, entry_id, category):
+def add_pending_flag(output_root, entry_id, category, store_id=None):
+    """Queue a failed Outlook flag and keep the mailbox StoreID.
+
+    Older installations stored only the category string. The retry logic stays
+    backward compatible with both formats.
+    """
     pending = load_pending_flags(output_root)
-    pending[entry_id] = category
+    pending[entry_id] = {
+        "category": category or "",
+        "store_id": store_id or "",
+    }
     save_pending_flags(output_root, pending)
 
 
