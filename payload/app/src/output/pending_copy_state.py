@@ -21,12 +21,15 @@ def load_pending_copies(output_root):
 
 def save_pending_copies(output_root, pending):
     with open(_path(output_root), "w", encoding="utf-8") as f:
-        json.dump(pending, f, indent=2)
+        json.dump(pending, f, indent=2, ensure_ascii=False)
 
 
-def add_pending_copy(output_root, entry_id, folder_name):
+def add_pending_copy(output_root, entry_id, folder_name, store_id=None):
     pending = load_pending_copies(output_root)
-    pending[entry_id] = folder_name
+    pending[entry_id] = {
+        "folder_name": folder_name,
+        "store_id": store_id or "",
+    }
     save_pending_copies(output_root, pending)
 
 

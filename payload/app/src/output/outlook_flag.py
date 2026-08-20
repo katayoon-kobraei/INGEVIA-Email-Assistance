@@ -2,6 +2,8 @@ import time
 
 import win32com.client
 
+from src.outlook_errors import is_outlook_resource_error
+
 # Outlook's OlFlagStatus enum. pywin32 doesn't expose these as named
 # constants without early binding, so the raw value is used directly.
 # olFlagMarked (2) = plain red "flagged for follow-up" flag -- this is
@@ -14,20 +16,24 @@ OL_FLAG_MARKED = 2
 def _try_flag_once(entry_id, category, outlook=None, store_id=None):
     if outlook is None:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
+    item = None
+    try:
+        item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
+        item.FlagStatus = OL_FLAG_MARKED
 
-    item.FlagStatus = OL_FLAG_MARKED
+        if category:
+            try:
+                existing = [c.strip() for c in (item.Categories or "").split(",") if c.strip()]
+                if category not in existing:
+                    existing.append(category)
+                    item.Categories = ", ".join(existing)
+            except Exception:
+                pass  # categories unsupported on this account type (e.g. IMAP) -- not fatal
 
-    if category:
-        try:
-            existing = [c.strip() for c in (item.Categories or "").split(",") if c.strip()]
-            if category not in existing:
-                existing.append(category)
-                item.Categories = ", ".join(existing)
-        except Exception:
-            pass  # categories unsupported on this account type (e.g. IMAP) -- not fatal
-
-    item.Save()
+        item.Save()
+    finally:
+        if item is not None:
+            del item
 
 
 def mark_email_processed(entry_id, category=None, outlook=None, store_id=None):
@@ -58,5 +64,7 @@ def mark_email_processed(entry_id, category=None, outlook=None, store_id=None):
         _try_flag_once(entry_id, category, outlook, store_id)
         return True
     except Exception as e:
+        if is_outlook_resource_error(e):
+            raise
         print(f"Could not flag email {entry_id} in Outlook: {e}")
         return False

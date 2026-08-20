@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 from email.header import decode_header, make_header
 from email.utils import parseaddr
 import json
@@ -14,6 +15,13 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from dotenv import load_dotenv
+
+from src.output.outlook_visibility import (
+    is_hidden_outlook_item,
+    load_hidden_ids as _load_hidden_outlook_ids,
+    sync_hidden_ids_from_outlook,
+)
+from src.dehu import is_dehu_sender
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -327,6 +335,76 @@ class PriorityLookup:
         return 0
 
 
+def load_ui_hidden_ids() -> set[str]:
+    """IDs that the processing PC has identified as Outlook Other/Otros.
+
+    Stored under OUTPUT_ROOT so viewer PCs apply exactly the same UI filter
+    without opening the boss mailbox.
+    """
+    return _load_hidden_outlook_ids(OUTPUT_ROOT)
+
+
+def _row_is_ui_hidden(row: dict[str, Any], hidden_ids: set[str] | None = None) -> bool:
+    # Official DEHU notifications are business-critical. v1.25 could persist
+    # their EntryID in _ui_hidden_outlook_ids.json when Outlook classified the
+    # message as Other/Otros. Even after v1.26 stopped hiding new DEHU mail,
+    # that stale shared ID could keep an already-processed DEHU row invisible
+    # on every processor/viewer UI. The index sender is authoritative here, so
+    # DEHU is always visible without requiring another Outlook COM lookup.
+    sender = (
+        row.get("Sender Email")
+        or row.get("SenderEmail")
+        or row.get("Sender/Recipient")
+        or ""
+    )
+    if is_dehu_sender(sender):
+        return False
+    hidden = hidden_ids if hidden_ids is not None else load_ui_hidden_ids()
+    entry_id = str(row.get("EntryID") or row.get("Entry ID") or "").strip()
+    return bool(entry_id and entry_id in hidden)
+
+
+def _missing_holding_pen_path(row: dict[str, Any]) -> bool:
+    """Hide stale YY-000 MAILS rows whose archived folder no longer exists.
+
+    This is a narrow safety net for legacy advertising/unsorted rows that were
+    later removed or reclassified. Valid 26-000 MAILS entries remain visible.
+    Project rows outside the holding pen are never hidden by this check.
+    """
+    raw = str(row.get("Folder Path") or row.get("Path") or row.get("Ruta") or "").strip()
+    if not raw or not re.search(r"(?:^|[\\/])\d{2}-000\s+MAILS(?:[\\/]|$)", raw, re.IGNORECASE):
+        return False
+    return resolve_open_path(raw) is None
+
+
+def _sync_ui_hidden_ids_from_outlook() -> None:
+    """Refresh the shared Other/Otros exclusion list on the processor PC.
+
+    This runs inside the existing background UI loader, so COM is initialized
+    explicitly and the desktop stays responsive. Viewer installations never
+    connect to Outlook and simply read the shared JSON generated here or by
+    the scheduled pipeline.
+    """
+    if not IS_PROCESSOR or os.name != "nt":
+        return
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return
+
+    pythoncom.CoInitialize()
+    try:
+        namespace = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        sync_hidden_ids_from_outlook(OUTPUT_ROOT, namespace)
+    except Exception:
+        # A temporary Outlook problem should never prevent the rest of the UI
+        # from loading; the last successful shared exclusion list remains.
+        pass
+    finally:
+        pythoncom.CoUninitialize()
+
+
 def load_processed_ids() -> set[str]:
     try:
         if PROCESSED_IDS_PATH.exists():
@@ -436,17 +514,20 @@ def sender_display(record: dict[str, Any]) -> str:
 
 
 def _is_saliente(row: dict[str, Any]) -> bool:
-    """True if a CSV row is a legacy outgoing (SALIENTE) record. The app
-    no longer processes outgoing mail at all (see get_recent_emails in
-    src/ingestion/outlook_local.py), but old index.csv/report rows filed
-    before that change may still say SALIENTE -- this keeps them out of
-    every UI table, filter, and count everywhere data_service loads rows,
-    rather than patching each screen individually."""
+    """Compatibility helper for callers that need to identify outgoing rows."""
     return str(row.get("Direction") or row.get("Dirección") or "").strip().upper() == "SALIENTE"
 
 
 def load_index_rows() -> list[dict[str, Any]]:
-    rows = [row for row in _read_csv(OUTPUT_ROOT / "index.csv") if not _is_saliente(row)]
+    hidden_ids = load_ui_hidden_ids()
+    rows = [
+        row for row in _read_csv(OUTPUT_ROOT / "index.csv")
+        if (
+            not _is_saliente(row)
+            and not _row_is_ui_hidden(row, hidden_ids)
+            and not _missing_holding_pen_path(row)
+        )
+    ]
     priority_lookup = load_priority_lookup()
     report_lookup = load_report_lookup()
     pending_lookup = load_pending_lookup()
@@ -464,8 +545,16 @@ def load_index_rows() -> list[dict[str, Any]]:
         row["Priority"] = priority if priority else ""
         row["_priority"] = priority
         report_row = report_lookup.get(key, {})
-        row["Summary"] = report_row.get("Summary", "")
-        row["_summary"] = report_row.get("Summary", "")
+        processing_status = str(row.get("Processing Status") or "").strip().upper()
+        if processing_status == "PENDING_AI":
+            row["Summary"] = "Pendiente de procesamiento por IA"
+            row["_summary"] = row["Summary"]
+        elif processing_status == "AI_REVIEW":
+            row["Summary"] = "Procesamiento IA fallido repetidamente; revisar"
+            row["_summary"] = row["Summary"]
+        else:
+            row["Summary"] = report_row.get("Summary", "")
+            row["_summary"] = report_row.get("Summary", "")
         # v1.14 stores the real Outlook sender in index.csv. For rows written
         # by older versions, fall back to the report and then to the existing
         # Sender/Recipient value so the new UI column is immediately useful.
@@ -482,7 +571,11 @@ def load_index_rows() -> list[dict[str, Any]]:
         )
         row["SenderDisplay"] = sender_display(row)
         row["_pending"] = key in pending_lookup
-        row["_status"] = "REVISAR" if row.get("Project Folder") == "UNSORTED" else "PROCESADO"
+        processing_status = str(row.get("Processing Status") or "").strip().upper()
+        if processing_status in {"PENDING_AI", "AI_REVIEW"}:
+            row["_status"] = processing_status
+        else:
+            row["_status"] = "REVISAR" if row.get("Project Folder") == "UNSORTED" else "PROCESADO"
 
     rows.sort(key=lambda row: row.get("_parsed_date") or datetime.min, reverse=True)
     return rows
@@ -491,9 +584,34 @@ def load_index_rows() -> list[dict[str, Any]]:
 def load_report_rows() -> list[dict[str, Any]]:
     priority_lookup = load_priority_lookup()
     pending_lookup = load_pending_lookup()
+    hidden_ids = load_ui_hidden_ids()
+
+    # v1.26.3 is incoming-only. Older report_log rows do not always carry a
+    # Direction field, so use index.csv as the authority for identifying and
+    # hiding any historical SALIENTE record as well.
+    legacy_saliente_ids: set[str] = set()
+    legacy_saliente_keys: set[tuple[str, str]] = set()
+    for index_row in _read_csv(OUTPUT_ROOT / "index.csv"):
+        if not _is_saliente(index_row):
+            continue
+        entry_id = str(index_row.get("EntryID") or "").strip()
+        if entry_id:
+            legacy_saliente_ids.add(entry_id)
+        legacy_saliente_keys.add(
+            _email_key(index_row.get("Date"), index_row.get("Subject"))
+        )
+
     rows: list[dict[str, Any]] = []
     for row in _read_csv(REPORT_LOG_PATH):
-        if _is_saliente(row):
+        report_entry_id = str(row.get("EntryID") or "").strip()
+        report_key = _email_key(row.get("Date"), row.get("Subject"))
+        if (
+            _is_saliente(row)
+            or (report_entry_id and report_entry_id in legacy_saliente_ids)
+            or report_key in legacy_saliente_keys
+            or _row_is_ui_hidden(row, hidden_ids)
+            or _missing_holding_pen_path(row)
+        ):
             continue
         date_text = " ".join(
             part for part in (str(row.get("Date") or ""), str(row.get("Time") or "")) if part
@@ -533,7 +651,11 @@ def load_activity_rows() -> list[dict[str, Any]]:
     records filed messages in ``index.csv`` and produces a human-readable report,
     so the UI can safely fall back to those rows when the activity log is absent.
     """
-    rows = [row for row in _read_csv(OUTPUT_ROOT / "activity_log.csv") if not _is_saliente(row)]
+    hidden_ids = load_ui_hidden_ids()
+    rows = [
+        row for row in _read_csv(OUTPUT_ROOT / "activity_log.csv")
+        if not _row_is_ui_hidden(row, hidden_ids)
+    ]
     if not rows:
         return load_index_rows()
     priority_lookup = load_priority_lookup()
@@ -553,8 +675,11 @@ def load_activity_rows() -> list[dict[str, Any]]:
 
 def load_pending_rows() -> list[dict[str, Any]]:
     priority_lookup = load_priority_lookup()
+    hidden_ids = load_ui_hidden_ids()
     normalized: list[dict[str, Any]] = []
     for row in _read_csv(PENDING_LIST_PATH):
+        if _row_is_ui_hidden(row, hidden_ids):
+            continue
         date = str(row.get("Date") or "")
         sender = str(row.get("Sender") or "")
         subject = str(row.get("Subject") or "")
@@ -582,8 +707,17 @@ def pending_count() -> int:
 
 
 def processed_ids_count() -> int:
-    ids = load_processed_ids()
-    return len(ids) if ids else len(load_index_rows())
+    rows = load_index_rows()
+    # Count finalized EMAILS, not archive rows. One email can legitimately be
+    # copied to multiple Plenergy/project destinations and therefore have more
+    # than one index row with the same EntryID.
+    finalized_ids = {
+        str(row.get("EntryID") or "").strip()
+        for row in rows
+        if row.get("_status") not in {"PENDING_AI", "AI_REVIEW"}
+        and str(row.get("EntryID") or "").strip()
+    }
+    return len(finalized_ids)
 
 
 def load_attachment_rows() -> list[dict[str, Any]]:
@@ -594,7 +728,10 @@ def load_attachment_rows() -> list[dict[str, Any]]:
     of Email Assistant folders and inspect only those metadata.json files.
     """
     rows: list[dict[str, Any]] = []
+    hidden_ids = load_ui_hidden_ids()
     for index_row in _read_csv(OUTPUT_ROOT / "index.csv"):
+        if _is_saliente(index_row) or _row_is_ui_hidden(index_row, hidden_ids):
+            continue
         raw_folder = str(index_row.get("Folder Path") or "").strip()
         if not raw_folder:
             continue
@@ -692,14 +829,15 @@ def load_ui_snapshot() -> dict[str, Any]:
             "The shared Email Assistant data folder is unavailable. "
             f"Check the office network connection and access permissions:\n{OUTPUT_ROOT}"
         )
+    # Processor refreshes the shared Other/Otros exclusion state before
+    # loading tables; viewers consume that same state from OUTPUT_ROOT.
     rows = load_index_rows()
     activity_log = OUTPUT_ROOT / "activity_log.csv"
     activity_rows = load_activity_rows() if activity_log.exists() else rows
     attachments = load_attachment_rows()
     pending_rows = load_pending_rows()
     report_rows = load_report_rows()
-    processed_ids = load_processed_ids()
-    processed = len(processed_ids) if processed_ids else len(rows)
+    processed = processed_ids_count()
     excel_info = get_report_excel_info(entries=len(report_rows))
     return {
         "rows": rows,
@@ -827,6 +965,34 @@ def open_path(path: str | Path) -> tuple[bool, str]:
         return False, str(exc)
 
 
+
+def open_email_record(record: dict[str, Any]) -> tuple[bool, str]:
+    """Open the email's CURRENT shared-index folder, not a stale UI snapshot.
+
+    The AI queue can move a captured email from ``Unprocessed`` to its final
+    archive between two UI refreshes. If the row on screen still contains the
+    old staging path, resolve the same EntryID again from index.csv and open the
+    newest existing path instead of showing a false "path does not exist" error.
+    """
+    raw_path = str(record.get("Folder Path") or "").strip()
+    ok, message = open_path(raw_path)
+    if ok:
+        return ok, message
+
+    entry_id = str(record.get("EntryID") or "").strip()
+    if not entry_id:
+        return ok, message
+    for current in _read_csv(OUTPUT_ROOT / "index.csv"):
+        if str(current.get("EntryID") or "").strip() != entry_id:
+            continue
+        current_path = str(current.get("Folder Path") or "").strip()
+        if not current_path or current_path == raw_path:
+            continue
+        current_ok, current_message = open_path(current_path)
+        if current_ok:
+            return current_ok, current_message
+    return ok, message
+
 def _safe_get(item: Any, property_name: str, default: Any = None) -> Any:
     try:
         value = getattr(item, property_name)
@@ -934,7 +1100,7 @@ def _target_mailbox_store_ids(namespace: Any) -> list[str]:
     except Exception:
         return store_ids
 
-    for folder_id in (6, 5):  # Inbox, Sent Items
+    for folder_id in (6,):  # Inbox only; Sent Items are intentionally ignored.
         try:
             folder = get_target_folder(namespace, folder_id, TARGET_MAILBOX)
             store_id = str(_safe_get(folder, "StoreID", "") or "").strip()
@@ -959,22 +1125,14 @@ def _get_processed_outlook_item(namespace: Any, entry_id: str, store_ids: list[s
 
 
 def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
-    """Show AI-processed emails that are flagged/stamped in Outlook.
+    """Show AI-processed messages that are currently flagged in Outlook.
 
-    Restores the original workflow:
-
-        AI processes email -> Outlook follow-up flag/category is applied
-        -> Marcados en Outlook shows the processed flagged item.
-
-    Incoming and outgoing processed mail are both included. The processed-ID
-    list remains the filter so unrelated manually-flagged mailbox history is not
-    mixed into the AI Assistant view.
+    Instead of calling GetItemFromID once for every processed email, query the
+    Inbox for FlagStatus=2 first and intersect that much smaller set with the AI
+    processed-ID set. Sent Items are intentionally never queried.
     """
     if IS_VIEWER:
-        # Viewer PCs intentionally do not connect to the boss Outlook mailbox.
-        # They show the shared processed-email set written by the processor.
         return _load_shared_processed_summary(limit)
-
     if os.name != "nt":
         return OutlookFlagSummary(0, [], error="Outlook is only available on Windows.")
 
@@ -982,40 +1140,106 @@ def load_outlook_flagged(limit: int = 250) -> OutlookFlagSummary:
     if not processed_ids:
         return OutlookFlagSummary(0, [])
 
+    # The dedupe state also contains messages deliberately ignored by the app
+    # (for example internal @ingevia.com mail). v1.26.3 can mark those messages
+    # in Outlook, but they must stay invisible everywhere in the application.
+    # Restrict the Flagged page to EntryIDs that actually have an app UI/report
+    # record; internal/blocked/no-attachment ignores never receive such a row.
+    ui_processed_ids: set[str] = set()
+    for record in load_index_rows() + load_report_rows():
+        entry_id = str(record.get("EntryID") or "").strip()
+        if entry_id:
+            ui_processed_ids.add(entry_id)
+    processed_ids = processed_ids.intersection(ui_processed_ids)
+    if not processed_ids:
+        return OutlookFlagSummary(0, [])
+
     try:
         import pythoncom
         import win32com.client
+        from src.outlook_mailbox import get_target_folder
     except ImportError as exc:
         return OutlookFlagSummary(0, [], error=f"pywin32 missing: {exc}")
 
     pythoncom.CoInitialize()
+    namespace = None
     try:
         namespace = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        store_ids = _target_mailbox_store_ids(namespace)
         rows: list[dict[str, Any]] = []
         total = 0
+        successful_restrict_folders = 0
 
-        for entry_id in processed_ids:
-            item = _get_processed_outlook_item(namespace, entry_id, store_ids)
-            if item is None:
-                continue
-            if _safe_get(item, "Class") != MAIL_ITEM_CLASS:
+        for folder_id, direction, time_field in (
+            (6, "ENTRANTE", "ReceivedTime"),
+        ):
+            try:
+                folder = get_target_folder(namespace, folder_id, TARGET_MAILBOX)
+                source_items = folder.Items
+                flagged_items = source_items.Restrict("[FlagStatus] = 2")
+                try:
+                    flagged_items.Sort(f"[{time_field}]", True)
+                except Exception:
+                    pass
+                successful_restrict_folders += 1
+                count = int(_safe_get(flagged_items, "Count", 0) or 0)
+                for index in range(1, count + 1):
+                    item = None
+                    try:
+                        item = flagged_items.Item(index)
+                        if _safe_get(item, "Class") != MAIL_ITEM_CLASS:
+                            continue
+                        entry_id = str(_safe_get(item, "EntryID", "") or "").strip()
+                        if not entry_id or entry_id not in processed_ids:
+                            continue
+                        if is_hidden_outlook_item(item):
+                            continue
+                        total += 1
+                        if len(rows) < limit:
+                            rows.append(_outlook_item_row(item, direction))
+                    finally:
+                        if item is not None:
+                            del item
+                del flagged_items
+                del source_items
+                del folder
+            except Exception:
                 continue
 
-            categories = _categories(item)
-            flag_status = int(_safe_get(item, "FlagStatus", 0) or 0)
-            is_stamped = PROCESSED_CATEGORY_NAME in categories or flag_status == 2
-            if not is_stamped:
-                continue
-
-            total += 1
-            if len(rows) < limit:
-                direction = "SALIENTE" if bool(_safe_get(item, "Sent", False)) else "ENTRANTE"
-                rows.append(_outlook_item_row(item, direction))
+        # Rare provider fallback: if Inbox does not accept the FlagStatus
+        # Restrict filter, resolve processed EntryIDs directly. Sent messages
+        # are explicitly discarded even in this fallback path.
+        if successful_restrict_folders == 0:
+            store_ids = _target_mailbox_store_ids(namespace)
+            for entry_id in processed_ids:
+                item = _get_processed_outlook_item(namespace, entry_id, store_ids)
+                if item is None:
+                    continue
+                try:
+                    if _safe_get(item, "Class") != MAIL_ITEM_CLASS:
+                        continue
+                    if is_hidden_outlook_item(item):
+                        continue
+                    categories = _categories(item)
+                    flag_status = int(_safe_get(item, "FlagStatus", 0) or 0)
+                    if PROCESSED_CATEGORY_NAME not in categories and flag_status != 2:
+                        continue
+                    if bool(_safe_get(item, "Sent", False)):
+                        continue
+                    total += 1
+                    if len(rows) < limit:
+                        rows.append(_outlook_item_row(item, "ENTRANTE"))
+                finally:
+                    del item
 
         rows.sort(key=lambda row: row.get("Fecha", ""), reverse=True)
         return OutlookFlagSummary(total=total, rows=rows[:limit], estimated=False)
     except Exception as exc:
         return OutlookFlagSummary(0, [], error=str(exc))
     finally:
+        try:
+            if namespace is not None:
+                del namespace
+        except Exception:
+            pass
+        gc.collect()
         pythoncom.CoUninitialize()

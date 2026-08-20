@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$PackageRoot,
     [string]$InstallMode = "",
     [string]$SharedDataPath = "",
@@ -395,10 +395,21 @@ Write-Host "[6/6] Configuring automation for this role..."
 $SchedulerInstalled = $false
 if ($InstallMode -eq "PROCESSOR") {
     try {
-        & (Join-Path $MaintenanceRoot "setup_scheduler.ps1")
+        # Preserve an explicitly installed temporary Outlook schedule. The
+        # temporary helper creates this restore task and will put the normal
+        # schedule back automatically when its window ends. Re-registering the
+        # normal task during an upgrade would unintentionally cancel the
+        # user's temporary exact-time schedule.
+        $TemporaryRestoreTask = Get-ScheduledTask -TaskName "INGEVIA Email AI Assistant - Restore Normal Schedule" -ErrorAction SilentlyContinue
+        if ($null -eq $TemporaryRestoreTask) {
+            & (Join-Path $MaintenanceRoot "setup_scheduler.ps1")
+        } else {
+            Write-Host "Temporary Outlook schedule detected; preserving it during this upgrade." -ForegroundColor Yellow
+        }
+        & (Join-Path $MaintenanceRoot "setup_ai_queue_scheduler.ps1")
         $SchedulerInstalled = $true
     } catch {
-        Write-Warning "The application was installed, but automatic email processing could not be registered. $($_.Exception.Message)"
+        Write-Warning "The application was installed, but one or more automatic processing tasks could not be registered. $($_.Exception.Message)"
     }
 } else {
     & (Join-Path $MaintenanceRoot "disable_all_schedulers.ps1")
@@ -419,7 +430,8 @@ Write-Host "Emails/attachments are filed under: $ArchiveRootPath\TRABAJOS <year>
 if ($InstallMode -eq "PROCESSOR") {
     Write-Host "Outlook mailbox: $TargetMailbox"
     if ($SchedulerInstalled) {
-        Write-Host "Automatic processing runs every 30 minutes from 05:30 to 20:00 while this Windows user is signed in."
+        Write-Host "Outlook capture runs every 30 minutes from 05:30 to 20:00 while this Windows user is signed in."
+        Write-Host "The staged AI queue runs every 2 minutes (maximum 2 emails per run) without opening Outlook."
     } else {
         Write-Host "Automatic processing is not active yet. Use REPAIR_EMAIL_SCHEDULER.bat after checking Windows Task Scheduler." -ForegroundColor Yellow
     }

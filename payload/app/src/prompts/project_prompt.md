@@ -7,8 +7,12 @@ All company/contact/topic labels must be concise Spanish/office-style text.
 Set is_relevant = true only for genuine professional correspondence with a client,
 collaborator, contractor, supplier, bank, government agency or public administration that is
 worth filing. Set is_relevant = false for social-media notifications, marketing/newsletters,
-automated receipts/bounces/login alerts, spam, or purely personal mail. When in doubt, prefer
-true.
+advertising, promotions, commercial campaigns, automated receipts/bounces/login alerts, spam,
+or purely personal mail. Marketing/newsletter/advertising content is ALWAYS irrelevant even
+when the sender belongs to a company that also exists in the server folder list; do not treat
+a known company name/domain by itself as evidence that a promotional message is project
+correspondence. When professional relevance is genuinely ambiguous (but it is not clearly
+marketing/advertising), prefer true.
 
 If is_relevant is false, the remaining fields are ignored, but still return valid values.
 

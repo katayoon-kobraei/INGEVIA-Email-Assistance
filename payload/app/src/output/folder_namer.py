@@ -1,5 +1,7 @@
 import re
 
+from src.dehu import is_dehu_email
+
 
 _WINDOWS_INVALID_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _CODE_PREFIX_RE = re.compile(r'^\s*\d{2}-\d+(?:-\d+)?\s+')
@@ -97,6 +99,84 @@ def _counterpart_name(email, contact_label=""):
     return "DESCONOCIDO"
 
 
+
+
+def extract_dehu_organismo_emisor(body):
+    """Extract the issuing authority from a DEHU notification body.
+
+    DEHU notifications normally expose a labelled ``Organismo emisor`` field.
+    Keep this deterministic so folder naming adds no Gemini/API call. Supports
+    both ``Organismo emisor: NAME`` and a label followed by NAME on the next
+    non-empty line. If the expected field is absent, return a safe explicit
+    fallback instead of inventing an authority.
+    """
+    text = str(body or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Collapse common non-breaking spaces while preserving line boundaries.
+    text = text.replace("\xa0", " ")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+
+    label_re = re.compile(
+        r"^\s*organismo\s+emisor(?:\s+de\s+la\s+notificaci[oó]n)?\s*(?::|[-–—])?\s*(.*)$",
+        re.IGNORECASE,
+    )
+    stop_re = re.compile(
+        r"^(?:asunto|concepto|fecha|identificador|id\b|nif\b|nif/cif|cif\b|"
+        r"titular|destinatario|referencia|c[oó]digo|enlace|acceso|expediente)\s*(?::|[-–—])?",
+        re.IGNORECASE,
+    )
+
+    for index, line in enumerate(lines):
+        match = label_re.match(line)
+        if not match:
+            continue
+
+        candidate = match.group(1).strip(" :-–—\t")
+        if candidate:
+            return _safe_component(candidate, max_chars=90) or "Organismo Desconocido"
+
+        # Some DEHU templates place the value on the next non-empty line.
+        for next_line in lines[index + 1:index + 7]:
+            candidate = next_line.strip(" :-–—\t")
+            if not candidate:
+                continue
+            if stop_re.match(candidate):
+                break
+            return _safe_component(candidate, max_chars=90) or "Organismo Desconocido"
+        break
+
+    # Defensive fallback for bodies where line wrapping was lost but the label
+    # and value remain in one continuous text segment.
+    compact = re.sub(r"[ \t]+", " ", text)
+    match = re.search(
+        r"organismo\s+emisor(?:\s+de\s+la\s+notificaci[oó]n)?\s*(?::|[-–—])\s*([^\n\r]{2,120})",
+        compact,
+        re.IGNORECASE,
+    )
+    if match:
+        candidate = match.group(1).strip(" :-–—\t")
+        # If another labelled field leaked into the same line, cut before it.
+        candidate = re.split(
+            r"\s+(?=(?:asunto|concepto|fecha|identificador|nif|cif|titular|destinatario|referencia|c[oó]digo|expediente)\s*:)",
+            candidate,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        cleaned = _safe_component(candidate, max_chars=90)
+        if cleaned:
+            return cleaned
+
+    return "Organismo Desconocido"
+
+
+def build_dehu_folder_name(email):
+    """DEHU-only naming rule: Date + Notificacion + correo.gob.es + Organismo."""
+    date_str = email["timestamp"].strftime("%y-%m-%d")
+    organismo = extract_dehu_organismo_emisor(email.get("body"))
+    return _safe_component(
+        f"{date_str} Notificacion correo.gob.es {organismo}",
+        max_chars=160,
+    )
+
 def build_routed_email_folder_name(email, company_folder_name, contact_label=""):
     """Boss-approved per-email folder naming convention.
 
@@ -109,7 +189,14 @@ def build_routed_email_folder_name(email, company_folder_name, contact_label="")
     The actual email subject is used (reply/forward prefixes are removed only to
     keep the folder readable). Components are sanitized and length-limited so
     they remain safe on Windows/network shares.
+
+    DEHU government notifications are the one naming exception and use:
+        YY-MM-DD Notificacion correo.gob.es Organismo Emisor
+    where Organismo Emisor is extracted locally from the email body.
     """
+    if is_dehu_email(email):
+        return build_dehu_folder_name(email)
+
     date_str = email["timestamp"].strftime("%y-%m-%d")
     sender = _counterpart_name(email, contact_label)
 

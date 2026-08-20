@@ -151,5 +151,16 @@ PLENERGY_SENDER_DOMAINS = os.environ.get("PLENERGY_SENDER_DOMAINS") or "plenergy
 # setting for that.
 LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES") or "35")
 
+# v1.26: Outlook ingestion and Gemini processing remain deliberately separated.
+# The Outlook task captures each eligible message once into OUTPUT_ROOT/Unprocessed
+# and flags it immediately.  A second scheduler consumes this queue without
+# opening Outlook.
+AI_QUEUE_BATCH_SIZE = max(1, int(os.environ.get("AI_QUEUE_BATCH_SIZE") or "2"))
+AI_QUEUE_RETRY_INITIAL_MINUTES = max(1, int(os.environ.get("AI_QUEUE_RETRY_INITIAL_MINUTES") or "8"))
+AI_QUEUE_MAX_RETRY_ATTEMPTS = max(1, int(os.environ.get("AI_QUEUE_MAX_RETRY_ATTEMPTS") or "6"))
+GEMINI_MIN_REQUEST_INTERVAL_SECONDS = max(0.0, float(os.environ.get("GEMINI_MIN_REQUEST_INTERVAL_SECONDS") or "5"))
+GEMINI_429_COOLDOWN_MINUTES = max(1, int(os.environ.get("GEMINI_429_COOLDOWN_MINUTES") or "6"))
+OUTLOOK_SIDE_EFFECT_BATCH_SIZE = max(1, int(os.environ.get("OUTLOOK_SIDE_EFFECT_BATCH_SIZE") or "10"))
+
 def ensure_output_root():
     os.makedirs(OUTPUT_ROOT, exist_ok=True)

@@ -1,4 +1,5 @@
 import os
+import gc
 import json
 import shutil
 import tempfile
@@ -6,6 +7,7 @@ from xml.sax.saxutils import escape
 
 from src.output.folder_namer import build_conversation_folder_name, build_routed_email_folder_name
 from src.safety.attachment_scanner import check_attachment
+from src.outlook_errors import is_outlook_resource_error
 from src.output.project_folders import (
     resolve_project_relative_path,
     get_holding_pen_name,
@@ -34,7 +36,7 @@ _VALUE_STYLE = ParagraphStyle("OutlookValue", fontName="Helvetica", fontSize=9.5
 _BODY_STYLE = ParagraphStyle("OutlookBody", fontName="Helvetica", fontSize=10.5, leading=15)
 
 
-def save_billing_email(email, output_root):
+def save_billing_email(email, output_root, outlook=None):
     """Files an external billing/procurement email directly under
     BILLING_OUTPUT_ROOT -- no project-folder resolution."""
     base_path = os.path.join(
@@ -48,21 +50,7 @@ def save_billing_email(email, output_root):
         f.write(f"From: {email['sender']}\n")
         f.write(f"Subject: {email['subject']}\nDate: {email['timestamp']}\n\n{email['body']}")
 
-    attachment_results = []
-    attachments = email["attachments"]
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        for i in range(1, attachments.Count + 1):
-            attachment = attachments.Item(i)
-            tmp_path = os.path.join(tmp_dir, attachment.FileName)
-            attachment.SaveAsFile(tmp_path)
-            is_safe, reason = check_attachment(tmp_path)
-            if is_safe:
-                shutil.move(tmp_path, os.path.join(folder_path, attachment.FileName))
-                attachment_results.append({"filename": attachment.FileName, "status": "saved", "reason": reason})
-            else:
-                os.makedirs(QUARANTINE_ROOT, exist_ok=True)
-                shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{attachment.FileName}"))
-                attachment_results.append({"filename": attachment.FileName, "status": "quarantined", "reason": reason})
+    attachment_results = _save_attachments_from_outlook(email, folder_path, outlook)
 
     metadata = {
         "id": email["id"], "direction": email["direction"],
@@ -91,9 +79,69 @@ def _save_as_msg(entry_id, folder_path, outlook=None, store_id=None):
         if outlook is None:
             outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
         item = outlook.GetItemFromID(entry_id, store_id) if store_id else outlook.GetItemFromID(entry_id)
-        item.SaveAs(os.path.join(folder_path, "email.msg"), OL_SAVE_AS_MSG)
+        try:
+            item.SaveAs(os.path.join(folder_path, "email.msg"), OL_SAVE_AS_MSG)
+        finally:
+            del item
     except Exception as e:
+        if is_outlook_resource_error(e):
+            raise
         print(f"Could not save .msg copy for {entry_id}: {e}")
+
+
+def _save_attachments_from_outlook(email, folder_path, outlook=None):
+    """Save/scan attachments without retaining COM collections in email rows.
+
+    The ingestion layer now stores only attachment names/counts.  The live
+    MailItem and Attachments collection are opened for this one email, used,
+    and released immediately, sharply reducing long-lived Outlook/MAPI refs.
+    """
+    expected_count = int(email.get("attachment_count") or 0)
+    if expected_count <= 0:
+        return []
+
+    namespace = outlook
+    created_namespace = False
+    item = None
+    attachments = None
+    try:
+        if namespace is None:
+            namespace = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+            created_namespace = True
+        store_id = email.get("store_id")
+        item = namespace.GetItemFromID(email["id"], store_id) if store_id else namespace.GetItemFromID(email["id"])
+        attachments = item.Attachments
+        count = int(getattr(attachments, "Count", 0) or 0)
+        results = []
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for i in range(1, count + 1):
+                attachment = attachments.Item(i)
+                try:
+                    filename = str(getattr(attachment, "FileName", "") or "").strip() or f"attachment_{i}"
+                    tmp_path = os.path.join(tmp_dir, filename)
+                    attachment.SaveAsFile(tmp_path)
+                    is_safe, reason = check_attachment(tmp_path)
+                    if is_safe:
+                        shutil.move(tmp_path, os.path.join(folder_path, filename))
+                        results.append({"filename": filename, "status": "saved", "reason": reason})
+                    else:
+                        os.makedirs(QUARANTINE_ROOT, exist_ok=True)
+                        shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{filename}"))
+                        results.append({"filename": filename, "status": "quarantined", "reason": reason})
+                finally:
+                    del attachment
+        return results
+    finally:
+        try:
+            if attachments is not None:
+                del attachments
+            if item is not None:
+                del item
+            if created_namespace and namespace is not None:
+                del namespace
+        except Exception:
+            pass
+        gc.collect()
 
 
 def _save_as_pdf(email, folder_path):
@@ -120,10 +168,9 @@ def _save_as_pdf(email, folder_path):
         rows.append(["Sent:", email["timestamp"].strftime("%A, %B %d, %Y %I:%M %p")])
         rows.append(["Subject:", email.get("subject") or ""])
 
-        attachments = email.get("attachments")
-        if attachments is not None and attachments.Count > 0:
-            names = ", ".join(attachments.Item(i).FileName for i in range(1, attachments.Count + 1))
-            rows.append(["Attachments:", names])
+        attachment_names = [str(name) for name in (email.get("attachment_names") or []) if str(name).strip()]
+        if attachment_names:
+            rows.append(["Attachments:", ", ".join(attachment_names)])
 
         table_data = [
             [Paragraph(escape(label), _LABEL_STYLE), Paragraph(escape(value), _VALUE_STYLE)]
@@ -313,21 +360,7 @@ def save_email(
     _save_as_msg(email["id"], folder_path, outlook, email.get("store_id"))
     _save_as_pdf(email, folder_path)
 
-    attachment_results = []
-    attachments = email["attachments"]
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        for i in range(1, attachments.Count + 1):
-            attachment = attachments.Item(i)
-            tmp_path = os.path.join(tmp_dir, attachment.FileName)
-            attachment.SaveAsFile(tmp_path)
-            is_safe, reason = check_attachment(tmp_path)
-            if is_safe:
-                shutil.move(tmp_path, os.path.join(folder_path, attachment.FileName))
-                attachment_results.append({"filename": attachment.FileName, "status": "saved", "reason": reason})
-            else:
-                os.makedirs(QUARANTINE_ROOT, exist_ok=True)
-                shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{attachment.FileName}"))
-                attachment_results.append({"filename": attachment.FileName, "status": "quarantined", "reason": reason})
+    attachment_results = _save_attachments_from_outlook(email, folder_path, outlook)
 
     metadata = {
         "id": email["id"], "direction": email["direction"],
@@ -368,21 +401,7 @@ def save_department_email(email, department_folder_name, output_root, outlook=No
     _save_as_pdf(email, folder_path)
 
 
-    attachment_results = []
-    attachments = email["attachments"]
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        for i in range(1, attachments.Count + 1):
-            attachment = attachments.Item(i)
-            tmp_path = os.path.join(tmp_dir, attachment.FileName)
-            attachment.SaveAsFile(tmp_path)
-            is_safe, reason = check_attachment(tmp_path)
-            if is_safe:
-                shutil.move(tmp_path, os.path.join(folder_path, attachment.FileName))
-                attachment_results.append({"filename": attachment.FileName, "status": "saved", "reason": reason})
-            else:
-                os.makedirs(QUARANTINE_ROOT, exist_ok=True)
-                shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{attachment.FileName}"))
-                attachment_results.append({"filename": attachment.FileName, "status": "quarantined", "reason": reason})
+    attachment_results = _save_attachments_from_outlook(email, folder_path, outlook)
 
     metadata = {
         "id": email["id"], "direction": email["direction"],
@@ -420,21 +439,7 @@ def save_plenergy_fallback_email(email, output_root, folder_label, outlook=None)
     _save_as_msg(email["id"], folder_path, outlook, email.get("store_id"))
     _save_as_pdf(email, folder_path)
 
-    attachment_results = []
-    attachments = email["attachments"]
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        for i in range(1, attachments.Count + 1):
-            attachment = attachments.Item(i)
-            tmp_path = os.path.join(tmp_dir, attachment.FileName)
-            attachment.SaveAsFile(tmp_path)
-            is_safe, reason = check_attachment(tmp_path)
-            if is_safe:
-                shutil.move(tmp_path, os.path.join(folder_path, attachment.FileName))
-                attachment_results.append({"filename": attachment.FileName, "status": "saved", "reason": reason})
-            else:
-                os.makedirs(QUARANTINE_ROOT, exist_ok=True)
-                shutil.move(tmp_path, os.path.join(QUARANTINE_ROOT, f"{email['id']}_{attachment.FileName}"))
-                attachment_results.append({"filename": attachment.FileName, "status": "quarantined", "reason": reason})
+    attachment_results = _save_attachments_from_outlook(email, folder_path, outlook)
 
     metadata = {
         "id": email["id"], "direction": email["direction"],

@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import os
 import re
+import subprocess
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -55,29 +57,36 @@ class PipelineWorker(QThread):
     finished_with_result = Signal(bool, str)
 
     def run(self) -> None:
-        stream = io.StringIO()
-        pythoncom = None
+        app_root = Path(__file__).resolve().parent.parent
+        launcher = app_root / "launch_pipeline.pyw"
+        executable = Path(sys.executable)
+        if executable.name.casefold() == "pythonw.exe":
+            console_python = executable.with_name("python.exe")
+            if console_python.is_file():
+                executable = console_python
+
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
-            if os.name == "nt":
-                import pythoncom as _pythoncom
-
-                pythoncom = _pythoncom
-                pythoncom.CoInitialize()
-            with redirect_stdout(stream), redirect_stderr(stream):
-                from src.pipeline import run as run_pipeline
-
-                run_pipeline()
-            output = stream.getvalue().strip() or "Proceso completado correctamente."
-            self.finished_with_result.emit(True, output)
+            completed = subprocess.run(
+                [str(executable), str(launcher), "--interactive"],
+                cwd=str(app_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                check=False,
+            )
+            output = "\n".join(
+                part.strip()
+                for part in (completed.stdout, completed.stderr)
+                if part and part.strip()
+            ).strip()
+            if not output:
+                output = "Proceso completado correctamente." if completed.returncode == 0 else f"Processing failed with exit code {completed.returncode}."
+            self.finished_with_result.emit(completed.returncode == 0, output)
         except Exception as exc:
-            log = stream.getvalue().strip()
-            message = f"{exc}"
-            if log:
-                message = f"{message}\n\nDetalles:\n{log}"
-            self.finished_with_result.emit(False, message)
-        finally:
-            if pythoncom is not None:
-                pythoncom.CoUninitialize()
+            self.finished_with_result.emit(False, str(exc))
 
 
 class OutlookFlagWorker(QThread):
@@ -473,12 +482,18 @@ class DashboardPage(QWidget):
         activity_title = QLabel("Actividad reciente")
         activity_title.setObjectName("SectionTitle")
         activity_layout.addWidget(activity_title)
-        self.recent_table = QTableWidget(0, 6)
+        self.recent_table = QTableWidget(0, 4)
         self.recent_table.setHorizontalHeaderLabels(
-            ["Fecha", "Dirección", "Proyecto", "Asunto", "Prioridad", "Estado"]
+            ["Fecha", "Guardado en", "Asunto", "Prioridad"]
         )
         configure_table(self.recent_table)
-        self.recent_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        recent_header = self.recent_table.horizontalHeader()
+        recent_header.setSectionResizeMode(0, QHeaderView.Interactive)
+        self.recent_table.setColumnWidth(0, 105)
+        recent_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        recent_header.setSectionResizeMode(2, QHeaderView.Stretch)
+        recent_header.setSectionResizeMode(3, QHeaderView.Interactive)
+        self.recent_table.setColumnWidth(3, 95)
         activity_layout.addWidget(self.recent_table)
         content.addWidget(activity_panel, 3)
 
@@ -536,10 +551,10 @@ class DashboardPage(QWidget):
         activity_rows: list[dict[str, Any]] | None = None,
         pending_rows: list[dict[str, Any]] | None = None,
     ) -> None:
-        review = [row for row in rows if row.get("Project Folder") == "UNSORTED"]
+        review = [row for row in rows if row.get("Project Folder") == "UNSORTED" or row.get("_status") == "AI_REVIEW"]
         quarantined = [row for row in attachments if row.get("Estado") == "quarantined"]
         self.processed_card.set_value(processed)
-        self.filed_card.set_value(len(rows))
+        self.filed_card.set_value(len([row for row in rows if row.get("_status") not in {"PENDING_AI", "AI_REVIEW"}]))
         self.review_card.set_value(len(review))
         pending_total = len(pending_rows or [])
         high_priority = [row for row in rows if int(row.get("_priority") or 0) >= 4]
@@ -548,7 +563,7 @@ class DashboardPage(QWidget):
         self.review_summary.setText(
             "✓ No hay correos pendientes de clasificación."
             if not review
-            else f"⚠ {len(review)} correo(s) están en UNSORTED y necesitan una revisión manual."
+            else f"⚠ {len(review)} correo(s) necesitan revisión manual de clasificación/IA."
         )
         self.quarantine_summary.setText(
             "✓ No hay adjuntos bloqueados."
@@ -573,33 +588,33 @@ class DashboardPage(QWidget):
             "REVISAR": "Revisar",
             "ERROR": "Error",
             "PENDIENTE": "Pendiente de respuesta",
+            "PENDING_AI": "Pendiente IA",
+            "AI_REVIEW": "Revisar IA",
             "PROCESADO": "Procesado",
         }
         self.recent_table.setRowCount(0)
         for record in source_rows[:12]:
             row = self.recent_table.rowCount()
             self.recent_table.insertRow(row)
-            raw_status = str(record.get("Status") or record.get("_status") or "PROCESADO")
-            status_text = status_labels.get(raw_status, raw_status.title())
+            saved_path = (
+                record.get("Folder Path")
+                or record.get("Path")
+                or record.get("Ruta")
+                or ""
+            )
             values = [
                 record.get("Date", ""),
-                direction_label(record.get("Direction", "")),
-                record.get("Project Folder", "") or "—",
+                saved_path or "—",
                 record.get("Subject", ""),
                 priority_label(record.get("_priority")),
-                status_text,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                apply_priority_style(item, record.get("_priority"), emphasize=column == 4)
-                if column == 5:
-                    color = {
-                        "ERROR": "#b42318",
-                        "REVISAR": "#b26a00",
-                        "OMITIDO": "#52667a",
-                        "PENDIENTE": "#6d28d9",
-                    }.get(raw_status, "#087443")
-                    item.setForeground(QColor(color))
+                if column == 1:
+                    item.setToolTip(str(saved_path))
+                if column == 2:
+                    item.setToolTip(str(record.get("Subject", "")))
+                apply_priority_style(item, record.get("_priority"), emphasize=column == 3)
                 self.recent_table.setItem(row, column, item)
 
     def update_flagged(self, summary: data_service.OutlookFlagSummary) -> None:
@@ -645,17 +660,12 @@ class EmailsPage(QWidget):
         )
         self.project_filter = QComboBox()
         self.project_filter.addItem("Todos los proyectos")
-        self.direction_filter = QComboBox()
-        self.direction_filter.addItems(
-            ["Todas las direcciones", "Entrante"]
-        )
         self.status_filter = QComboBox()
         self.status_filter.addItems(
-            ["Todos los estados", "Procesado", "Revisar"]
+            ["Todos los estados", "Procesado", "Pendiente IA", "Revisar", "Revisar IA"]
         )
         filters.addWidget(self.search, 2)
         filters.addWidget(self.project_filter, 1)
-        filters.addWidget(self.direction_filter, 1)
         filters.addWidget(self.status_filter, 1)
         outer.addLayout(filters)
 
@@ -679,37 +689,55 @@ class EmailsPage(QWidget):
         summary_layout.addWidget(self.email_summary)
         outer.addWidget(summary_panel)
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
             [
                 "Fecha",
-                "Dirección",
-                "Proyecto",
+                "Guardado en",
                 "Contacto",
                 "Remitente",
                 "Asunto",
                 "Resumen",
                 "Adjuntos",
                 "Prioridad",
-                "Estado",
             ]
         )
         configure_table(self.table)
         self.table.setWordWrap(False)
-        self.table.setColumnWidth(4, 280)
-        self.table.horizontalHeader().setSectionResizeMode(
-            5, QHeaderView.Stretch
+
+        # Todas las columnas de Correos son ajustables por el usuario.
+        # Arrastra el separador de la cabecera para ampliar o reducir cualquier
+        # columna. Doble clic en un separador autoajusta esa columna al contenido.
+        header = self.table.horizontalHeader()
+        header.setMinimumSectionSize(24)
+        header.setStretchLastSection(False)
+        header.setCascadingSectionResizes(False)
+        for column in range(self.table.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+
+        initial_widths = {
+            0: 95,   # Fecha
+            1: 520,  # Guardado en
+            2: 125,  # Contacto
+            3: 190,  # Remitente
+            4: 320,  # Asunto
+            5: 420,  # Resumen
+            6: 90,   # Adjuntos
+            7: 95,   # Prioridad
+        }
+        for column, width in initial_widths.items():
+            self.table.setColumnWidth(column, width)
+
+        header.sectionHandleDoubleClicked.connect(
+            lambda logical_index: self.table.resizeColumnToContents(logical_index)
         )
-        self.table.horizontalHeader().setSectionResizeMode(
-            6, QHeaderView.Stretch
-        )
+        self.table.setTextElideMode(Qt.ElideRight)
         # La tabla ahora utiliza todo el ancho disponible. El panel lateral de
         # detalles se ha eliminado; la selección solo actualiza el resumen superior.
         outer.addWidget(self.table, 1)
 
         self.search.textChanged.connect(self.apply_filters)
         self.project_filter.currentTextChanged.connect(self.apply_filters)
-        self.direction_filter.currentTextChanged.connect(self.apply_filters)
         self.status_filter.currentTextChanged.connect(self.apply_filters)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.cellDoubleClicked.connect(self._open_selected)
@@ -736,7 +764,6 @@ class EmailsPage(QWidget):
     def apply_filters(self) -> None:
         query = self.search.text().strip().lower()
         project = self.project_filter.currentText()
-        direction = self.direction_filter.currentText()
         status = self.status_filter.currentText()
 
         filtered: list[dict[str, Any]] = []
@@ -751,6 +778,7 @@ class EmailsPage(QWidget):
                     "SenderEmail",
                     "SenderDisplay",
                     "Project Folder",
+                    "Folder Path",
                     "Topic",
                     "Sender/Recipient",
                     "Priority",
@@ -763,17 +791,18 @@ class EmailsPage(QWidget):
                 and record.get("Project Folder") != project
             ):
                 continue
-            if (
-                direction == "Entrante"
-                and record.get("Direction") != "ENTRANTE"
-            ):
+            if record.get("Direction") == "SALIENTE":
                 continue
             if (
                 status == "Procesado"
                 and record.get("_status") != "PROCESADO"
             ):
                 continue
+            if status == "Pendiente IA" and record.get("_status") != "PENDING_AI":
+                continue
             if status == "Revisar" and record.get("_status") != "REVISAR":
+                continue
+            if status == "Revisar IA" and record.get("_status") != "AI_REVIEW":
                 continue
             filtered.append(record)
 
@@ -782,43 +811,36 @@ class EmailsPage(QWidget):
         self.table.setRowCount(len(visible))
         for row, record in enumerate(visible):
             summary = str(record.get("Summary") or "").strip()
+            saved_path = str(record.get("Folder Path") or "").strip()
             values = [
                 record.get("Date", ""),
-                direction_label(record.get("Direction", "")),
-                record.get("Project Folder", ""),
+                saved_path,
                 record.get("Contact", ""),
                 record.get("SenderDisplay") or data_service.sender_display(record),
                 record.get("Subject", ""),
                 summary or "Sin resumen disponible",
                 record.get("Attachments", "0"),
                 priority_label(record.get("_priority")),
-                (
-                    "Revisar"
-                    if record.get("_status") == "REVISAR"
-                    else "Procesado"
-                ),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if column == 0:
                     item.setData(Qt.UserRole, record)
-                if column == 4:
+                if column == 1:
+                    item.setToolTip(saved_path)
+                if column == 2:
+                    item.setToolTip(str(record.get("Contact", "")))
+                if column == 3:
                     item.setToolTip(str(record.get("SenderDisplay") or data_service.sender_display(record)))
-                if column == 6:
+                if column == 4:
+                    item.setToolTip(str(record.get("Subject", "")))
+                if column == 5:
                     item.setToolTip(summary or "Sin resumen disponible")
                 apply_priority_style(
                     item,
                     record.get("_priority"),
-                    emphasize=column == 8,
+                    emphasize=column == 7,
                 )
-                if column == 9:
-                    item.setForeground(
-                        QColor(
-                            "#b26a00"
-                            if record.get("_status") == "REVISAR"
-                            else "#087443"
-                        )
-                    )
                 self.table.setItem(row, column, item)
         self.table.setUpdatesEnabled(True)
 
@@ -856,7 +878,7 @@ class EmailsPage(QWidget):
         record = self._selected_record()
         if not record:
             return
-        ok, message = data_service.open_path(record.get("Folder Path", ""))
+        ok, message = data_service.open_email_record(record)
         if not ok:
             QMessageBox.warning(self, "No se pudo abrir", message)
 
@@ -1690,6 +1712,13 @@ class MainWindow(QMainWindow):
         self.dashboard.refresh_requested.connect(self.refresh_all)
         self.dashboard.open_output_requested.connect(self.open_output)
         QTimer.singleShot(120, self.refresh_all)
+        # Actualiza automáticamente solo los datos compartidos/locales cada 2
+        # minutos para reflejar cuándo la cola IA mueve un correo a su carpeta
+        # final. Este temporizador NO consulta Outlook.
+        self.local_auto_timer = QTimer(self)
+        self.local_auto_timer.setInterval(120000)
+        self.local_auto_timer.timeout.connect(self.refresh_local_only)
+        self.local_auto_timer.start()
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -1739,7 +1768,7 @@ class MainWindow(QMainWindow):
             else f"Este equipo procesa el buzón {data_service.TARGET_MAILBOX}."
         )
         layout.addWidget(status)
-        version = QLabel("Desktop UI 1.10")
+        version = QLabel("Desktop UI 1.26.9")
         version.setObjectName("SidebarStatus")
         layout.addWidget(version)
         return sidebar
@@ -1828,6 +1857,15 @@ class MainWindow(QMainWindow):
         self.local_worker.start()
         self.refresh_outlook_flags()
 
+    def refresh_local_only(self) -> None:
+        if self.local_worker and self.local_worker.isRunning():
+            return
+        self.local_worker = LocalDataWorker(self)
+        self.local_worker.loaded.connect(self._local_data_loaded)
+        self.local_worker.failed.connect(self._local_data_failed)
+        self.local_worker.finished.connect(self._local_refresh_finished)
+        self.local_worker.start()
+
     def _local_data_loaded(self, snapshot: dict[str, Any]) -> None:
         rows = snapshot.get("rows", [])
         activity_rows = snapshot.get("activity_rows", [])
@@ -1904,7 +1942,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Procesar correos",
-            "Se revisarán los correos recientes de la bandeja de entrada y enviados.\n\n¿Deseas continuar?",
+            "Se revisarán únicamente los correos recientes de la bandeja de entrada.\n\n¿Deseas continuar?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
@@ -1946,9 +1984,6 @@ def configure_table(table: QTableWidget) -> None:
 
 
 def direction_label(value: str) -> str:
-    # Outgoing (SALIENTE) mail is never processed or shown anymore -- see
-    # get_recent_emails() in src/ingestion/outlook_local.py and
-    # data_service._is_saliente(). Only ENTRANTE is expected here now.
     if value == "ENTRANTE":
         return "Entrante"
     return value

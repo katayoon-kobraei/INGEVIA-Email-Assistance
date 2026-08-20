@@ -1,4 +1,5 @@
 import datetime
+import gc
 from email.header import decode_header, make_header
 from email.parser import Parser
 from email.utils import parseaddr
@@ -7,9 +8,10 @@ from typing import Any
 import win32com.client
 
 from src.outlook_mailbox import get_target_folder
+from src.output.outlook_visibility import is_hidden_outlook_item
+from src.dehu import is_dehu_sender
 
 INBOX_FOLDER_ID = 6
-SENT_FOLDER_ID = 5
 MAIL_ITEM_CLASS = 43
 TO_RECIPIENT_TYPE = 1
 CC_RECIPIENT_TYPE = 2
@@ -285,21 +287,88 @@ def resolve_sender_identity(message: Any) -> tuple[str, str]:
     return _sender_name(message), _sender_address(message)
 
 
-def _fetch_from_folder(outlook: Any, folder_id: int, minutes_back: float, direction: str) -> list[dict]:
+def _attachment_snapshot(message: Any) -> tuple[int, list[str]]:
+    """Return plain attachment metadata without retaining COM objects.
+
+    Keeping ``message.Attachments`` inside every email dictionary held Outlook
+    COM references alive for the whole AI run.  That gradually increased MAPI
+    pressure on long-running Outlook sessions.  The real attachment objects are
+    now re-fetched only when a particular email is actually being filed.
+    """
+    attachments = _safe_get(message, "Attachments")
+    count = int(_safe_get(attachments, "Count", 0) or 0)
+    names: list[str] = []
+    for index in range(1, count + 1):
+        attachment = _safe_call(attachments, "Item", index)
+        if attachment is None:
+            continue
+        try:
+            name = str(_safe_get(attachment, "FileName", "") or "").strip()
+            if name:
+                names.append(name)
+        finally:
+            del attachment
+    try:
+        del attachments
+    except Exception:
+        pass
+    return count, names
+
+
+def _fetch_from_folder(
+    outlook: Any,
+    folder_id: int,
+    minutes_back: float,
+    direction: str,
+    *,
+    sender_filter: set[str] | None = None,
+) -> list[dict]:
     folder = get_target_folder(outlook, folder_id)
-    messages = folder.Items
+    source_messages = folder.Items
     store_id = str(_safe_get(folder, "StoreID", "") or "")
     time_field = "ReceivedTime" if direction == "ENTRANTE" else "SentOn"
+
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_back)
+    messages = source_messages
+    used_restrict = False
+
+    # Ask Outlook for only the requested time window when the provider accepts
+    # Items.Restrict().  This materially reduces MAPI objects on large Inbox
+    # folders.  Some IMAP/providers reject date filters, so the existing sorted
+    # scan remains a safe automatic fallback.
+    try:
+        cutoff_local = cutoff.astimezone()
+        outlook_cutoff = cutoff_local.strftime("%m/%d/%Y %I:%M %p")
+        messages = source_messages.Restrict(f"[{time_field}] >= '{outlook_cutoff}'")
+        used_restrict = True
+    except Exception:
+        messages = source_messages
+
+    # Guard against a provider accepting Restrict() syntactically but
+    # mishandling the localized date string. If it returns zero rows, inspect
+    # only the newest source item; fall back to the old sorted scan only when
+    # that newest item proves there should have been a match.
+    if used_restrict and int(_safe_get(messages, "Count", 0) or 0) == 0:
+        try:
+            source_messages.Sort(f"[{time_field}]", True)
+            newest = _safe_call(source_messages, "Item", 1)
+            if newest is not None:
+                try:
+                    newest_utc = _as_utc(_safe_get(newest, time_field))
+                    if newest_utc is not None and newest_utc >= cutoff:
+                        messages = source_messages
+                        used_restrict = False
+                finally:
+                    del newest
+        except Exception:
+            pass
 
     sorted_descending = True
     try:
         messages.Sort(f"[{time_field}]", True)
     except Exception:
-        # If a provider rejects Sort(), scan all items rather than assuming
-        # their existing order is chronological.
         sorted_descending = False
 
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_back)
     results: list[dict] = []
     skipped_unsupported = 0
     skipped_unreadable = 0
@@ -311,69 +380,87 @@ def _fetch_from_folder(outlook: Any, folder_id: int, minutes_back: float, direct
             skipped_unreadable += 1
             continue
 
-        item_class = _safe_get(message, "Class")
-        if item_class is not None:
-            try:
-                if int(item_class) != MAIL_ITEM_CLASS:
+        try:
+            item_class = _safe_get(message, "Class")
+            if item_class is not None:
+                try:
+                    if int(item_class) != MAIL_ITEM_CLASS:
+                        skipped_unsupported += 1
+                        continue
+                except (TypeError, ValueError):
                     skipped_unsupported += 1
                     continue
-            except (TypeError, ValueError):
-                skipped_unsupported += 1
+
+            # Outlook Other/Otros is a strict exclusion. Messages classified
+            # there are ignored before attachment checks, Outlook marking,
+            # staging, Gemini, archive and UI handling.
+            actual_sender_email = _sender_address(message) if direction == "ENTRANTE" else ""
+            normalized_sender = str(actual_sender_email or "").strip().casefold()
+            if sender_filter is not None and normalized_sender not in sender_filter:
+                continue
+            if direction == "ENTRANTE" and is_hidden_outlook_item(message):
                 continue
 
-        timestamp = _safe_get(message, time_field)
-        timestamp_utc = _as_utc(timestamp)
-        if timestamp_utc is None:
-            skipped_unreadable += 1
-            continue
-        if timestamp_utc < cutoff:
-            if sorted_descending:
-                break
-            continue
+            timestamp = _safe_get(message, time_field)
+            timestamp_utc = _as_utc(timestamp)
+            if timestamp_utc is None:
+                skipped_unreadable += 1
+                continue
+            if timestamp_utc < cutoff:
+                if sorted_descending and not used_restrict:
+                    break
+                continue
 
-        entry_id = str(_safe_get(message, "EntryID", "") or "").strip()
-        if not entry_id:
-            skipped_unreadable += 1
-            continue
+            entry_id = str(_safe_get(message, "EntryID", "") or "").strip()
+            if not entry_id:
+                skipped_unreadable += 1
+                continue
 
-        was_unread = bool(_safe_get(message, "UnRead", False))
-        to_text = _recipient_text(message, "To", TO_RECIPIENT_TYPE)
-        cc_text = _recipient_text(message, "CC", CC_RECIPIENT_TYPE)
-        body = str(_safe_get(message, "Body", "") or "")
+            was_unread = bool(_safe_get(message, "UnRead", False))
+            to_text = _recipient_text(message, "To", TO_RECIPIENT_TYPE)
+            cc_text = _recipient_text(message, "CC", CC_RECIPIENT_TYPE)
+            body = str(_safe_get(message, "Body", "") or "")
 
-        actual_sender_email = _sender_address(message)
-        actual_sender_name = _sender_name(message)
+            if direction != "ENTRANTE":
+                actual_sender_email = _sender_address(message)
+            actual_sender_name = _sender_name(message)
+            attachment_count, attachment_names = _attachment_snapshot(message)
 
-        results.append(
-            {
-                "id": entry_id,
-                "store_id": store_id,
-                "subject": str(_safe_get(message, "Subject", "(Sin asunto)") or "(Sin asunto)"),
-                # Keep the existing routing semantics unchanged: ``sender`` is
-                # populated only for incoming messages.  The two fields below
-                # are dedicated display/audit fields and are safe for both
-                # incoming and outgoing messages.
-                "sender": actual_sender_email if direction == "ENTRANTE" else None,
-                "sender_name": actual_sender_name,
-                "sender_email": actual_sender_email,
-                "recipient": to_text if direction == "SALIENTE" else None,
-                "to": to_text,
-                "cc": cc_text,
-                "timestamp": timestamp,
-                "body": body,
-                "attachments": _safe_get(message, "Attachments", _EMPTY_ATTACHMENTS),
-                "direction": direction,
-            }
-        )
+            results.append(
+                {
+                    "id": entry_id,
+                    "store_id": store_id,
+                    "subject": str(_safe_get(message, "Subject", "(Sin asunto)") or "(Sin asunto)"),
+                    "sender": actual_sender_email if direction == "ENTRANTE" else None,
+                    "sender_name": actual_sender_name,
+                    "sender_email": actual_sender_email,
+                    "recipient": to_text if direction == "SALIENTE" else None,
+                    "to": to_text,
+                    "cc": cc_text,
+                    "timestamp": timestamp,
+                    "body": body,
+                    "attachment_count": attachment_count,
+                    "attachment_names": attachment_names,
+                    # Snapshot the current visual Outlook follow-up state. The
+                    # processing pipeline uses this for ignored internal mail so
+                    # it can repair a missing red flag without re-flagging the
+                    # same recent message on every overlap scan.
+                    "flag_status": int(_safe_get(message, "FlagStatus", 0) or 0),
+                    "direction": direction,
+                }
+            )
 
-        # Reading Body can mark an IMAP message as read. Restore the previous
-        # unread state without allowing a write failure to stop processing.
-        if was_unread and not bool(_safe_get(message, "UnRead", was_unread)):
-            try:
-                message.UnRead = True
-                message.Save()
-            except Exception:
-                pass
+            # Reading Body can mark an IMAP message as read. Restore the previous
+            # unread state without allowing a write failure to stop processing.
+            if was_unread and not bool(_safe_get(message, "UnRead", was_unread)):
+                try:
+                    message.UnRead = True
+                    message.Save()
+                except Exception:
+                    pass
+        finally:
+            # Do not keep a live MailItem reference beyond this one iteration.
+            del message
 
     skipped_total = skipped_unsupported + skipped_unreadable
     if skipped_total:
@@ -383,23 +470,67 @@ def _fetch_from_folder(outlook: Any, folder_id: int, minutes_back: float, direct
             "normal emails will continue to be processed."
         )
 
+    try:
+        del messages
+        del source_messages
+        del folder
+    except Exception:
+        pass
+    gc.collect()
     return results
 
 
 def get_recent_emails(minutes_back: int = 30, outlook: Any = None) -> list[dict]:
-    """Return recent standard mail items from the Inbox only.
+    """Return recent standard mail from the configured mailbox Inbox only.
 
-    Sent Items is intentionally never scanned -- the app no longer
-    processes or files outgoing (SALIENTE) mail at all. This is the
-    single chokepoint that controls that: every email this function
-    returns has direction "ENTRANTE", so nothing downstream (folder
-    routing, prompts, the desktop viewer's live counts) ever sees a
-    SALIENTE email from a new pipeline run again. Already-filed
-    historical SALIENTE folders/records from before this change are
-    left untouched on disk.
-
-    ``outlook`` may be an already-open MAPI namespace reused by the pipeline.
+    v1.26.3+ is deliberately incoming-only: Sent Items is never opened, scanned,
+    indexed, flagged, classified, archived, or displayed by the application.
     """
-    if outlook is None:
-        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-    return _fetch_from_folder(outlook, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")
+    if outlook is not None:
+        return _fetch_from_folder(outlook, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")
+
+    app = namespace = None
+    try:
+        app = win32com.client.Dispatch("Outlook.Application")
+        namespace = app.GetNamespace("MAPI")
+        return _fetch_from_folder(namespace, INBOX_FOLDER_ID, minutes_back, "ENTRANTE")
+    finally:
+        namespace = None
+        app = None
+        gc.collect()
+
+
+def get_recent_dehu_emails(minutes_back: int, outlook: Any = None) -> list[dict]:
+    """Return only recent official DEHU sender messages from Inbox.
+
+    Used for the v1.26 one-time recovery of DEHU emails that v1.25 could have
+    skipped because they had no attachments or Outlook classified them as Other.
+    The sender filter is applied before Body/attachment snapshots, keeping this
+    historical repair scan much lighter than a normal full-mailbox rescan.
+    """
+    from src.dehu import DEHU_SENDER
+
+    if outlook is not None:
+        return _fetch_from_folder(
+            outlook,
+            INBOX_FOLDER_ID,
+            minutes_back,
+            "ENTRANTE",
+            sender_filter={DEHU_SENDER},
+        )
+
+    app = namespace = None
+    try:
+        app = win32com.client.Dispatch("Outlook.Application")
+        namespace = app.GetNamespace("MAPI")
+        return _fetch_from_folder(
+            namespace,
+            INBOX_FOLDER_ID,
+            minutes_back,
+            "ENTRANTE",
+            sender_filter={DEHU_SENDER},
+        )
+    finally:
+        namespace = None
+        app = None
+        gc.collect()

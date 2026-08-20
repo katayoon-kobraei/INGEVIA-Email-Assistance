@@ -1,69 +1,114 @@
-INGEVIA EMAIL AI ASSISTANT v1.18 - ENGINEERING TEAM DEPLOYMENT
-==============================================================
+INGEVIA EMAIL AI ASSISTANT v1.26.9 - DEPLOYMENT GUIDE
+=====================================================
+
+INCOMING-ONLY POLICY
+--------------------
+Only the configured boss mailbox Inbox (ENTRANTE) is processed.
+Sent Items / SALIENTE are intentionally never scanned and are hidden from UI.
 
 ARCHITECTURE
 ------------
-Boss Outlook -> ONE Processing PC -> shared app data + P:\TRABAJOS 2026
-                                      |
-                                      +-> Engineer Viewer PCs
-
-STORAGE
--------
-A. Shared app state/UI:
-       P:\Email Assistant Data
-   (or UNC equivalent)
-
-B. Real engineering archive:
-       P:\TRABAJOS 2026
-
-Do not use Email Assistant Data\TRABAJOS 2026 as the archive.
-
-ROUTING FOR NEW EMAILS - BOTH DIRECTIONS
------------------------------------------
-1. Company exists + project exists + incoming:
-       TRABAJOS 2026\Company\Project\03.-CORREO\ENTRANTE\Email Folder
-
-2. Company exists + project exists + outgoing:
-       TRABAJOS 2026\Company\Project\03.-CORREO\SALIENTE\Email Folder
-
-3. Company exists + project does NOT exist (incoming OR outgoing):
-       TRABAJOS 2026\26-000 MAILS\Email Folder
-
-4. Company does NOT exist (incoming OR outgoing):
-       TRABAJOS 2026\26-000 MAILS\Email Folder
-
-No company or project folder is created automatically when a real match is not
-found.
-
-Email-folder naming:
-       YY-MM-DD Contact_Name Subject Company
-
-For ENTRANTE, Contact_Name is the sender. For SALIENTE, it is the recipient.
+Boss Inbox -> Processing PC -> P:\Email Assistant Data
+                           -> P:\TRABAJOS 2026
+                           -> Viewer PCs read shared state
 
 PROCESSOR INSTALLATION
 ----------------------
-1. Close the old app.
-2. Run INSTALL_AS_PROCESSING_COMPUTER.bat.
-3. Enter the shared Email Assistant Data folder.
-4. For "TRABAJOS 2026 folder", enter:
-       P:\TRABAJOS 2026
-   or its UNC equivalent.
-5. Enter the boss Outlook mailbox.
-6. Test one incoming and one outgoing email against a known project.
-7. Confirm they appear under ENTRANTE and SALIENTE respectively.
+1. Close the Email Assistant.
+2. Do NOT uninstall the previous version.
+3. Run INSTALL_AS_PROCESSING_COMPUTER.bat.
+4. Keep the same shared-data path, normally P:\Email Assistant Data.
+5. Keep the real archive path, normally P:\TRABAJOS 2026.
+6. Keep the configured boss Outlook mailbox.
+7. Send/receive one external test email WITH an attachment into the boss Inbox.
+8. Click Process New Emails or wait for the 30-minute Inbox task.
+9. Confirm the Inbox email is flagged and appears as Pending AI.
+10. Within a few minutes confirm the AI queue changes it to Processed and files
+    it into the correct project or 26-000 MAILS.
 
 VIEWER INSTALLATION
 -------------------
 1. Run INSTALL_AS_VIEWER_COMPUTER.bat.
-2. Enter the same shared Email Assistant Data folder.
-3. Enter the same P:\TRABAJOS 2026 path (or UNC equivalent).
-4. Confirm the engineer can open that archive in File Explorer.
-5. Open the app and double-click an email to verify its real folder opens.
+2. Use the same shared-data folder and project archive path.
+3. Viewer computers do not access Outlook or Gemini.
 
-NOTES
------
-- Only one PC should be PROCESSOR.
-- All engineer PCs should be VIEWER.
-- If P: is not mapped identically on every PC, use the exact UNC path.
-- v1.18 does not move/rename previously archived emails; it changes/protects
-  routing for newly processed mail.
+INCOMING ROUTING
+----------------
+Company + project found:
+    TRABAJOS 2026\Company\Project\03.-CORREO\ENTRANTE\Email Folder
+
+Company or project not found:
+    TRABAJOS 2026\26-000 MAILS\Email Folder
+
+No company/project folder is invented automatically.
+
+DEHU
+----
+Official sender:
+    noreply.dehu@correos.gob.es
+
+Official DEHU notices are processed even with zero attachments and even when
+Outlook places them in Other/Otros.
+
+DEHU naming:
+    YY-MM-DD Notificacion correo.gob.es Organismo Emisor
+
+After upgrade, a one-time narrow 10-day Inbox scan checks only the official DEHU
+sender and recovers missing EntryIDs without duplicating already captured mail.
+
+AI QUEUE
+--------
+The AI worker runs every 2 minutes from:
+    P:\Email Assistant Data\Unprocessed
+
+It does not reopen Outlook. 429/503/temporary Gemini failures remain staged for
+retry. Existing recoverable v1.25 path-length AI_REVIEW items are reset once and
+retried from their saved staging data.
+
+OUTLOOK RESOURCE PROTECTION
+---------------------------
+Outlook capture runs in a short-lived worker. A single-instance lock prevents
+simultaneous Inbox capture runs. Temporary mailbox-access/resource failures are
+retried once with a fresh worker; catch-up lookback covers the missed interval
+later. v1.26.5 explicitly releases the Outlook Application/MAPI Namespace and
+reduces legacy Other/Otros GetItemFromID calls to lower MAPI pressure.
+
+IMPORTANT
+---------
+The processing computer must be able to access the configured boss mailbox and
+P: paths. If mapped drives are unreliable for scheduled tasks, use UNC paths.
+
+v1.26.3 - INTERNAL INBOX MAIL
+-----------------------------
+Internal @ingevia.com Inbox messages are not AI-classified, archived, or shown in the app. They are nevertheless visually marked in Outlook after inspection (red follow-up flag and best-effort IA - PROCESADO category). Internal flagged messages are excluded from the app's Flagged view. SALIENTE remains disabled.
+
+
+v1.26.4 - CORREOS TABLE LAYOUT
+-------------------------------
+The Correos/Emails table uses compact widths for metadata columns and gives the remaining space to Subject and Summary. Long project names no longer force Contact/Sender and later columns off-screen at normal desktop widths.
+
+
+v1.26.5 - OUTLOOK STABILITY / UTF-8
+-------------------------------------
+Capture workers now force UTF-8 diagnostics, explicitly release Outlook COM/MAPI
+objects before COM shutdown, run cleanup checkpoints during each Outlook session,
+and treat the observed Outlook COM startup failures as retryable resource errors.
+The legacy Other/Otros reconciliation workload is also reduced.
+
+
+v1.26.7 - CRASH-SAFE CAPTURE CHECKPOINT
+---------------------------------------
+The processor now writes _last_run.json only after the full Inbox capture batch
+finishes successfully. If an item fails mid-batch, the previous checkpoint stays
+unchanged and the next run catches up automatically; EntryID dedupe prevents
+duplicates.
+
+
+v1.26.7: no-attachment Outlook marking and UI Guardado en/Saved in full-path columns.
+
+v1.26.9: Outlook Other/Otros hard exclusion restored; normal Other/Otros mail is ignored completely, with no sender exceptions.
+
+
+v1.26.9 UI UPDATE
+------------------
+Correos/Emails: every visible column can be resized manually by dragging its header separator. Double-clicking a separator auto-fits that column. All v1.26.8 Outlook Other/Otros exclusion and processing rules are unchanged.
